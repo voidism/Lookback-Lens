@@ -1,0 +1,8 @@
+torch==2.0.0
+numpy==1.26.2
+scipy
+tiktoken
+openai
+editdistance
+scikit-learn
+accelerate # if needed multi-gpu inference

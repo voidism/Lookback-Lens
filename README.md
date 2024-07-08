@@ -30,6 +30,8 @@ gzip -d data/nq-open-10_total_documents_gold_at_4.jsonl.gz
 
 ## Preparation 📚
 
+**\*\*Hint: Skip step 01 & 02 by downloading the precomputed lookback ratios & annotations [here](https://www.dropbox.com/scl/fi/a87iv6xw9xma6ppc5pw2h/step1and2.tar.bz?rlkey=j382rsrwu2wnfwj7sn14ai3qw&dl=0).\*\***
+
 ### Step 01: Extracting Lookback Ratios from Attention Weights (NQ and CNN/DM) (Optional)
 ```bash
 python step01_extract_attns.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/nq-open-10_total_documents_gold_at_4.jsonl --output-path lookback-ratio-nq-7b.pt
@@ -38,12 +40,12 @@ python step01_extract_attns.py --model-name meta-llama/Llama-2-7b-chat-hf --data
 
 ### Step 02: Run GPT-4o Annotation (NQ and CNN/DM) (Optional)
 ```bash
-python step02_eval_gpt4o.py --hyp lookback-ratio-nq-7b.pt --ref data/nq-open-10_total_documents_gold_at_4.jsonl --out anno-nq-7b.jsonl
-python step02_eval_gpt4o.py --hyp lookback-ratio-cnndm-7b.pt --ref data/xsum-1000.jsonl --out anno-cnndm-7b.jsonl
+OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp lookback-ratio-nq-7b.pt --ref data/nq-open-10_total_documents_gold_at_4.jsonl --out anno-nq-7b.jsonl
+OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp lookback-ratio-cnndm-7b.pt --ref data/xsum-1000.jsonl --out anno-cnndm-7b.jsonl
 ```
 
 ## Logistic Regression Classifiers (Lookback Lens) 📈
-Skip step 01 & 02 by downloading the precomputed lookback ratios & annotations [here](https://www.dropbox.com/scl/fi/a87iv6xw9xma6ppc5pw2h/step1and2.tar.bz?rlkey=j382rsrwu2wnfwj7sn14ai3qw&dl=0).
+
 
 ### Step 03: Fitting Lookback Lens Classifiers (NQ and CNN/DM)
 ```bash
@@ -123,7 +125,7 @@ The output will be similar to:
 Accuracy: 0.490
 # Lookback Lens Guided Decoding
 Accuracy: 0.586
-(the result may vary due to 1. the randomness of GPT-4o API and 2. the randomness of sampling)
+(the result may vary due to the randomness of GPT-4o API and the randomness of sampling)
 ```
 
 # Citation
