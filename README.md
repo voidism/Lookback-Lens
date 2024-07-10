@@ -1,7 +1,12 @@
 # Lookback Lens 🔎 🦙
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-g.svg)](https://opensource.org/licenses/MIT)
+[![Arxiv](https://img.shields.io/badge/arXiv-2407.07071-B21A1B)](https://arxiv.org/abs/2407.07071)
+[![Hugging Face Transformers](https://img.shields.io/badge/%F0%9F%A4%97-Transformers-blue)](https://github.com/huggingface/transformers)
+
 Code for the paper **"Detecting and Mitigating Contextual Hallucinations in Large Language Models Using Only Attention Maps"**
 
+Paper: https://arxiv.org/abs/2407.07071  
 Authors: [Yung-Sung Chuang](https://people.csail.mit.edu/yungsung/)$^\dagger$, [Linlu Qiu](https://linlu-qiu.github.io/)$^\dagger$, [Cheng-Yu Hsieh](https://chengyuhsieh.github.io/)$^\ddagger$, [Ranjay Krishna](https://ranjaykrishna.com/index.html)$^\ddagger$, [Yoon Kim](https://people.csail.mit.edu/yoonkim/)$^\dagger$, [James Glass](https://people.csail.mit.edu/jrg/)$^\dagger$  
 $^\dagger$ Massachusetts Institute of Technology, $^\ddagger$ University of Washington
 
@@ -136,7 +141,7 @@ Please cite our paper if it's helpful to your work!
 @article{chuang2024lookback,
   title={Lookback Lens: Detecting and Mitigating Contextual Hallucinations in Large Language Models Using Only Attention Maps},
   author={Chuang, Yung-Sung and Qiu, Linlu and Hsieh, Cheng-Yu and Krishna, Ranjay and Kim, Yoon and Glass, James},
-  journal={arXiv preprint arXiv:2024},
+  journal={arXiv preprint arXiv:2407.07071},
   year={2024},
 }
 ```
