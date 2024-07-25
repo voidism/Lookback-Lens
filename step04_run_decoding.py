@@ -186,39 +186,39 @@ def set_seed(seed):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="meta-llama/Llama-7b-chat-hf")
-    parser.add_argument("--num-gpus", type=str, default="1")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-7b-chat-hf")
+    parser.add_argument("--num_gpus", type=str, default="1")
     parser.add_argument("--device", type=str,
                         choices=["cuda", "cpu"], default="cuda")
-    parser.add_argument("--max-memory", type=int, default=45)
-    parser.add_argument("--auth-token", type=str, default=None)
-    parser.add_argument("--output-path", type=str, default="./output.jsonl")
+    parser.add_argument("--max_memory", type=int, default=45)
+    parser.add_argument("--auth_token", type=str, default=None)
+    parser.add_argument("--output_path", type=str, default="./output.jsonl")
     # data
-    parser.add_argument("--data-type", type=str, default=None)
-    parser.add_argument("--data-path", type=str, default="./data/nq-open-10_total_documents_gold_at_4.jsonl")
+    parser.add_argument("--data_type", type=str, default=None)
+    parser.add_argument("--data_path", type=str, default="./data/nq-open-10_total_documents_gold_at_4.jsonl")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--subsample", type=int, default=None)
     # parallel mode (split the dataset into multiple parts, inference by separate processes)
     parser.add_argument("--parallel", action="store_true")
-    parser.add_argument("--total-shard", type=int, default=8)
-    parser.add_argument("--shard-id", type=int, default=0)
+    parser.add_argument("--total_shard", type=int, default=8)
+    parser.add_argument("--shard_id", type=int, default=0)
     # generation
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max_new_tokens", type=int, default=256)
     parser.add_argument("--top_p", type=float, default=0.95) # only used when do_sample is True
     parser.add_argument("--top_k", type=int, default=0) # only used when do_sample is True
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--do_sample", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     # classifier model path
-    parser.add_argument("--guiding-classifier", type=str, default=None)
+    parser.add_argument("--guiding_classifier", type=str, default=None)
     # chunk size
-    parser.add_argument("--chunk-size", type=int, default=5)
+    parser.add_argument("--chunk_size", type=int, default=5)
     # num candidates
-    parser.add_argument("--num-candidates", type=int, default=8)
+    parser.add_argument("--num_candidates", type=int, default=8)
     # conversion matrix
-    parser.add_argument("--conversion-matrix", type=str, default=None)
+    parser.add_argument("--conversion_matrix", type=str, default=None)
     # feat_layer
-    parser.add_argument("--feat-layer", type=int, default=None)
+    parser.add_argument("--feat_layer", type=int, default=None)
     
 
     args = parser.parse_args()

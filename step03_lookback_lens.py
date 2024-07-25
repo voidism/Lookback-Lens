@@ -34,9 +34,9 @@ def min_edit_distance_substring(s1, s2):
     return best_substring, min_edit_dist
 
 
-def load_files(anno_file, attn_file, predefined_span=True, verbose=False, is_feat=False, feat_layer=32, tokenizer_name=None):
+def load_files(anno_file, attn_file, predefined_span=True, verbose=False, is_feat=False, feat_layer=32, tokenizer_name=None, auth_token=None):
     anno_data = []
-    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name, token=auth_token)
 
     with open(anno_file, 'r') as f:
         for line in f:
@@ -342,7 +342,8 @@ def main(anno_file_1, attn_file_1, anno_file_2, attn_file_2,
          two_fold=False,
          conversion=None,
          tokenizer_name=None,
-         output_path=None
+         output_path=None,
+         auth_token=None
         ):
     comb1 = (anno_file_1, attn_file_1, anno_file_2, attn_file_2)
     comb2 = (anno_file_2, attn_file_2, anno_file_1, attn_file_1)
@@ -359,7 +360,7 @@ def main(anno_file_1, attn_file_1, anno_file_2, attn_file_2,
         # load data
         lookback_tensor, labels = load_files(
             anno_file, attn_file, predefined_span=predefined_span,
-            is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name)
+            is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name, auth_token=auth_token)
         if not predefined_span:
             lookback_tensor, labels = convert_to_token_level(
                 lookback_tensor, labels, sliding_window=sliding_window, sequential=True, min_pool_target=True)
@@ -504,6 +505,7 @@ if __name__ == "__main__":
     parser.add_argument('--conversion_matrix', type=str, default=None)
     # output path
     parser.add_argument('--output_path', type=str, default=None)
+    parser.add_argument('--auth_token', type=str, default=None)
 
     args = parser.parse_args()
     conversion = None
@@ -535,5 +537,6 @@ if __name__ == "__main__":
         two_fold=two_fold,
         conversion=conversion,
         tokenizer_name=args.tokenizer_name,
-        output_path=args.output_path
+        output_path=args.output_path,
+        auth_token=args.auth_token,
     )

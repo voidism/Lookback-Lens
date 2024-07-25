@@ -4,6 +4,8 @@
 [![Arxiv](https://img.shields.io/badge/arXiv-2407.07071-B21A1B)](https://arxiv.org/abs/2407.07071)
 [![Hugging Face Transformers](https://img.shields.io/badge/%F0%9F%A4%97-Transformers-blue)](https://github.com/huggingface/transformers)
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/voidism/Lookback-Lens/blob/master/lookback_lens_demo.ipynb)
+
 Code for the paper **"Detecting and Mitigating Contextual Hallucinations in Large Language Models Using Only Attention Maps"**
 
 Paper: https://arxiv.org/abs/2407.07071  
@@ -38,8 +40,11 @@ gzip -d data/nq-open-10_total_documents_gold_at_4.jsonl.gz
 **\*\*Hint: Skip step 01 & 02 by downloading the precomputed lookback ratios & annotations [here](https://www.dropbox.com/scl/fi/a87iv6xw9xma6ppc5pw2h/step1and2.tar.bz?rlkey=j382rsrwu2wnfwj7sn14ai3qw&dl=0).\*\***
 
 ### Step 01: Extracting Lookback Ratios from Attention Weights (NQ and CNN/DM) (Optional)
+
+> To load LLaMA2 models/tokenizers, please login with `huggingface-cli login`, or add the argument `--auth_token <hf_auth_token>` where `<hf_auth_token>` is your huggingface auth token with LLaMA2 access.
+
 ```bash
-python step01_extract_attns.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/nq-open-10_total_documents_gold_at_4.jsonl --output-path lookback-ratio-nq-7b.pt
+python step01_extract_attns.py --model-name meta-llama/Llama-2-7b-chat-hf --data-path data/nq-open-10_total_documents_gold_at_4.jsonl --output-path lookback-ratio-nq-7b.pt
 python step01_extract_attns.py --model-name meta-llama/Llama-2-7b-chat-hf --data-path data/cnndm-1000.jsonl --output-path lookback-ratio-cnndm-7b.pt
 ```
 
@@ -53,6 +58,9 @@ OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp lookback-ratio-cnndm
 
 
 ### Step 03: Fitting Lookback Lens Classifiers (NQ and CNN/DM)
+
+> To load LLaMA2 models/tokenizers, please login with `huggingface-cli login`, or add the argument `--auth_token <hf_auth_token>` where `<hf_auth_token>` is your huggingface auth token with LLaMA2 access.
+
 ```bash
 # Predefined Span
 python step03_lookback_lens.py --anno_1 anno-nq-7b.jsonl --anno_2 anno-cnndm-7b.jsonl --lookback_ratio_1 lookback-ratio-nq-7b.pt --lookback_ratio_2 lookback-ratio-cnndm-7b.pt
@@ -83,24 +91,27 @@ A=cnndm-7b;B=nq-7b, 0.8650978795284527, 0.8474340844981891, 0.6608756591251488
 
 We perform decoding with `classifiers/classifier_anno-cnndm-7b_sliding_window_8.pkl` for both tasks to test the in-domain (XSum) and out-of-domain (NQ) performance of the Lookback Lens Guided Decoding.
 
+> To load LLaMA2 models/tokenizers, please login with `huggingface-cli login`, or add the argument `--auth_token <hf_auth_token>` where `<hf_auth_token>` is your huggingface auth token with LLaMA2 access.
+
+
 ```bash
 # Greedy (NQ)
-python step04_run_decoding.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/nq-open-10_total_documents_gold_at_4.jsonl --output-path output-nq-open-greedy-decoding.jsonl --num-gpus 1
+python step04_run_decoding.py --model_name meta-llama/Llama-2-7b-chat-hf/ --data_path data/nq-open-10_total_documents_gold_at_4.jsonl --output_path output-nq-open-greedy-decoding.jsonl --num_gpus 1
 # Lookback Lens Guided Decoding (NQ)
-python step04_run_decoding.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/nq-open-10_total_documents_gold_at_4.jsonl --output-path output-nq-open-lookback-decoding.jsonl --num-gpus 1 --do_sample --guiding-classifier classifiers/classifier_anno-cnndm-7b_sliding_window_8.pkl --chunk-size 8 --num-candidates 8 
+python step04_run_decoding.py --model_name meta-llama/Llama-2-7b-chat-hf/ --data_path data/nq-open-10_total_documents_gold_at_4.jsonl --output_path output-nq-open-lookback-decoding.jsonl --num_gpus 1 --do_sample --guiding_classifier classifiers/classifier_anno-cnndm-7b_sliding_window_8.pkl --chunk_size 8 --num_candidates 8 
 ```
 
 
 ```bash
 # Greedy (XSum)
-python step04_run_decoding.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/xsum-1000.jsonl --output-path output-xsum-greedy-decoding.jsonl --num-gpus 1
+python step04_run_decoding.py --model_name meta-llama/Llama-2-7b-chat-hf/ --data_path data/xsum-1000.jsonl --output_path output-xsum-greedy-decoding.jsonl --num_gpus 1
 # Lookback Lens Guided Decoding (XSum)
-python step04_run_decoding.py --model-name meta-llama/Llama-2-7b-chat-hf/ --data-path data/xsum-1000.jsonl --output-path output-xsum-lookback-decoding.jsonl --num-gpus 1 --do_sample --guiding-classifier classifiers/classifier_anno-cnndm-7b_sliding_window_8.pkl --chunk-size 8 --num-candidates 8 
+python step04_run_decoding.py --model_name meta-llama/Llama-2-7b-chat-hf/ --data_path data/xsum-1000.jsonl --output_path output-xsum-lookback-decoding.jsonl --num_gpus 1 --do_sample --guiding_classifier classifiers/classifier_anno-cnndm-7b_sliding_window_8.pkl --chunk_size 8 --num_candidates 8 
 ```
 
 #### If too slow: Parallel (Sharded) Inference
 
-Running inference in sharded mode can be done by setting `--parallel --total-shard 4 --shard-id 0` for the first shard, `--parallel --total-shard 4 --shard-id 1` for the second shard, and so on. The dataset will be split into 4 shards and the inference of each shard can be run in parallel.
+Running inference in sharded mode can be done by setting `--parallel --total_shard 4 --shard_id 0` for the first shard, `--parallel --total_shard 4 --shard_id 1` for the second shard, and so on. The dataset will be split into 4 shards and the inference of each shard can be run in parallel.
 
 ## Evaluation 📊
 
