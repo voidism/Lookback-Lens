@@ -26,6 +26,10 @@ We further apply this detector to mitigate hallucination generations, and find t
 
 
 ## Installation
+
+Python version: 3.9.5  
+CUDA toolkit version: 11.7  
+
 ```bash
 pip install -r requirements.txt
 pip install -e ./transformers-4.32.0
