@@ -158,15 +158,13 @@ def set_seed(seed):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="facebook/opt-350m")
+    parser.add_argument("--model-name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
     parser.add_argument("--num-gpus", type=str, default="1")
     parser.add_argument("--device", type=str,
                         choices=["cuda", "cpu"], default="cuda")
-    parser.add_argument("--data-path", type=str, default="./gsm8k")
-    parser.add_argument("--output-path", type=str, default="./gsm8k_result")
+    parser.add_argument("--data-path", type=str, default="data/cnndm-1000.jsonl")
+    parser.add_argument("--output-path", type=str, default="lookback-ratio-cnndm-7b.pt")
     # parallel mode (split the dataset into multiple parts, inference by separate processes)
-    parser.add_argument("--early-exit-layers", type=str, default="-1")
-    parser.add_argument("--divergence-type", type=str, default="js")
     parser.add_argument("--parallel", action="store_true")
     parser.add_argument("--total-shard", type=int, default=8)
     parser.add_argument("--shard-id", type=int, default=0)
@@ -174,37 +172,12 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--top_k", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=0.9)
-    parser.add_argument("--repetition_penalty", type=float, default=1.0)
-    parser.add_argument("--extrapolate_coeff", type=float, default=10000.0)
-    parser.add_argument("--relative_top", type=float, default=0.1)
-    # parser.add_argument("--relative_top_value", type=float, default=-1000.0)
-    parser.add_argument("--relative_top_with_norm", action="store_true")
-    parser.add_argument("--contrast_disagree_only", action="store_true")
-    parser.add_argument("--pre_softmax", action="store_true")
     parser.add_argument("--do_sample", action="store_true")
     parser.add_argument("--do_shuffle", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--subsample", type=int, default=None)
-    parser.add_argument("--penalty_alpha", type=float, default=None)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--retry", type=int, default=1)
-    parser.add_argument("--tuned-lens-path", type=str, default=None)
     parser.add_argument("--auth-token", type=str, default=None)
-    parser.add_argument("--premature_temp", type=float, default=1.0)
-    parser.add_argument("--apply_early_norm", action="store_true")
-    parser.add_argument("--attn-intervention", action="store_true")
-    parser.add_argument("--attn-intervention-low-prob", action="store_true")
-    parser.add_argument("--attn-int-factor", type=float, default=0.0001)
-    parser.add_argument("--low-prob-percentile", type=float, default=0.1)
-    parser.add_argument("--keys-path", type=str, default=None)
-    parser.add_argument("--pause-num", type=int, default=3)
-    parser.add_argument("--alpha", type=float, default=10)
-    # parser.add_argument("--subsets", type=str, default="hallucinated_summary,right_summary")
-    parser.add_argument("--pondering", type=str, default=None)
-    parser.add_argument("--free-form", action="store_true")
-    parser.add_argument("--attn-score", action="store_true")
-    parser.add_argument("--shift-by-1", action="store_true")
-    parser.add_argument("--important-token-type", type=str, default=None)
     parser.add_argument("--data-type", type=str, default=None)
     parser.add_argument("--teacher-forcing-jsonl", type=str, default=None)
     # max_memory
@@ -245,11 +218,7 @@ if __name__ == "__main__":
         max_memory=args.max_memory)
     stop_word_list = ["#Document#:", "#Question#:", "#Article#:", "Q:", "\end{code}"]
     llm.set_stop_words(stop_word_list)
-    early_exit_layers = [int(x) for x in args.early_exit_layers.split(',')]
     mode = "vanilla"
-    final_layer = None
-    base_layer = None
-    dynamic_exit_layers = None
     if args.teacher_forcing_jsonl is not None:
         teacher_forcing_dict = {}
         with open(args.teacher_forcing_jsonl, 'r') as f:
@@ -265,11 +234,9 @@ if __name__ == "__main__":
         teacher_forcing_ids = torch.tensor([teacher_forcing_dict[sample['data_index']]], device=device) \
                                 if args.teacher_forcing_jsonl is not None else None
         input_text = build_prompt(sample['context'], f"\n#{data_response_names[args.data_type]}#:", data_type=args.data_type)
-        generate_kwargs = dict(max_new_tokens=args.max_new_tokens, penalty_alpha=args.penalty_alpha, do_sample=args.do_sample, top_p=args.top_p, top_k=args.top_k, temperature=args.temperature, repetition_penalty=args.repetition_penalty, extrapolate_coeff=args.extrapolate_coeff, pre_softmax=args.pre_softmax, mode=mode, final_layer=final_layer, base_layer=base_layer,
-                            base_layers=dynamic_exit_layers, divergence_type=args.divergence_type, 
-                            relative_top=args.relative_top, relative_top_with_norm=args.relative_top_with_norm, 
-                            contrast_disagree_only=args.contrast_disagree_only, 
-                            premature_temp=args.premature_temp, apply_early_norm=args.apply_early_norm, 
+        generate_kwargs = dict(max_new_tokens=args.max_new_tokens, 
+                               do_sample=args.do_sample, top_p=args.top_p, top_k=args.top_k, 
+                               temperature=args.temperature, mode=mode, 
                             return_attentions=True, teacher_forcing_seq=teacher_forcing_ids)
         model_completion, attentions, model_completion_ids = llm.generate(
             input_text, **generate_kwargs)
