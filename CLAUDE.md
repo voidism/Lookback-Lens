@@ -18,6 +18,8 @@ Lookback Lens is a research codebase for detecting and mitigating contextual hal
 - **generation.py**: LLM class for model loading and inference with attention extraction
 - **eval_exact_match.py**: Evaluation utilities for NQ dataset exact match scoring
 - **lookback_lens_demo.ipynb**: Interactive demo notebook with full pipeline
+- **extract_attentions.py**: Qwen3 model attention extraction for target field analysis
+- **visualize_attentions.py**: Attention heatmap visualization and analysis tools
 
 ### Data Structure
 - **data/**: Contains datasets (NQ-Open, CNN/DM, XSum) in JSONL format
@@ -87,6 +89,26 @@ python eval_exact_match.py --hyp output-nq-greedy.jsonl --ref data/nq-open-10_to
 OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp output-xsum-greedy.jsonl --ref data/xsum-1000.jsonl --out eval-results.jsonl
 ```
 
+### Qwen3 Attention Analysis Commands
+
+#### Extract Qwen3 Attention Weights
+```bash
+# Extract attention weights from Qwen3 model with thinking mode
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --output-path qwen3_attentions.pt --jsonl-output qwen3_records.log --num-samples 10 --max-new-tokens 25600
+
+# With custom parameters
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --num-samples 5 --temperature 0.6 --top-p 0.95 --top-k 20 --seed 42 --max-memory 40
+```
+
+#### Visualize Attention Heatmaps
+```bash
+# Create attention visualization heatmaps
+python visualize_attentions.py --data-path qwen3_attentions.pt --output-dir attention_visualizations --tokenizer-name Qwen/Qwen3-14B
+
+# Limit number of samples to visualize
+python visualize_attentions.py --data-path qwen3_attentions.pt --output-dir attention_visualizations --max-samples 5
+```
+
 ## Key Technical Details
 
 - **Modified Transformers**: Uses custom transformers-4.32.0 with attention extraction capabilities
@@ -94,6 +116,9 @@ OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp output-xsum-greedy.j
 - **Memory Requirements**: LLaMA inference requires high-memory environments (>40GB recommended)
 - **Lookback Ratio Calculation**: Attention weights ratio between context tokens vs generated tokens
 - **Transfer Learning**: Classifiers trained on one dataset/task can transfer to others
+- **Qwen3 Support**: Extract and visualize attention weights from Qwen3-14B with thinking mode enabled
+- **Target Field Analysis**: Focus on specific text segments (marked by ###) for attention analysis
+- **Attention Visualization**: Generate heatmaps showing attention patterns across prompt, thinking, and response sections
 
 ## Data Formats
 
@@ -101,3 +126,6 @@ OPENAI_API_KEY={your_key} python step02_eval_gpt4o.py --hyp output-xsum-greedy.j
 - **Annotations**: JSONL files with hallucination binary labels
 - **Datasets**: JSONL format with fields like 'question', 'context', 'answer', 'summary'
 - **Classifiers**: Scikit-learn LogisticRegression models saved as pickle files
+- **Qwen3 Attention Data**: PyTorch .pt files containing attention weights, target fields, and token information
+- **Wandb Gemini CSV**: Input data with columns 'prompt', 'conv_num' for Qwen3 analysis
+- **Visualization Output**: PNG heatmaps showing attention patterns and summary statistics

@@ -1,0 +1,300 @@
+# Qwen3 14B Attention Extraction and Visualization Implementation Plan
+
+## Overview
+
+This document outlines the detailed implementation plan for two main functionalities:
+1. Extract attention weights from Qwen3 14B model responses 
+2. Visualize attention distributions with heatmaps
+
+## Functionality One: extract_attentions.py
+
+### 1. Model Configuration
+
+#### Qwen3 14B Model Setup
+- **Model Name**: `"Qwen/Qwen3-14B"`
+- **Mirror Source**: Use Alibaba Cloud mirror for domestic users
+  ```bash
+  export HF_ENDPOINT=https://hf-mirror.com
+  export HF_HUB_CACHE=/root/autodl-tmp
+  ```
+- **Thinking Mode**: Fixed thinking mode with `enable_thinking=True`
+- **Chat Template**: Use Qwen3's official chat template for thinking mode
+
+#### Model Loading Strategy
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import os
+
+# Set environment variables for mirror and cache
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+os.environ['HF_HUB_CACHE'] = '/root/autodl-tmp'
+
+model_name = "Qwen/Qwen3-14B"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype="auto",
+    device_map="auto"
+)
+```
+
+### 2. Data Loading Implementation
+
+#### CSV Data Processing Function
+Create `load_wandb_gemini()` function to:
+- Read CSV file: `data/wandb_gemini.csv`
+- Filter rows where `conv_num == 2`
+- Select first 10 samples
+- Extract `prompt` column as context
+
+```python
+import pandas as pd
+
+def load_wandb_gemini(file_path="data/wandb_gemini.csv", num_samples=10):
+    df = pd.read_csv(file_path)
+    filtered_df = df[df['conv_num'] == 2].head(num_samples)
+    
+    list_data_dict = []
+    for idx, row in filtered_df.iterrows():
+        new_item = {
+            'context': row['prompt'],
+            'data_index': idx
+        }
+        list_data_dict.append(new_item)
+    
+    return list_data_dict
+```
+
+### 3. Target Field Extraction
+
+#### Extract Function Logic
+Define `extract_target_field()` function to:
+- Find the last occurrence of `###` in model_completion
+- Extract content from that position to next newline (excluding `###`)
+- Calculate token positions for the extracted field
+
+```python
+def extract_target_field(model_completion, tokenizer):
+    # Find last occurrence of ###
+    last_hash_pos = model_completion.rfind('###')
+    if last_hash_pos == -1:
+        return None, None, None
+    
+    # Extract field content (after ### until newline)
+    start_pos = last_hash_pos + 3  # Skip ###
+    end_pos = model_completion.find('\n', start_pos)
+    if end_pos == -1:
+        end_pos = len(model_completion)
+    
+    target_field = model_completion[start_pos:end_pos].strip()
+    
+    # Calculate token positions
+    prefix_text = model_completion[:start_pos]
+    prefix_tokens = tokenizer.encode(prefix_text)
+    field_tokens = tokenizer.encode(target_field)
+    
+    field_start_token = len(prefix_tokens)
+    field_end_token = field_start_token + len(field_tokens)
+    
+    return target_field, field_start_token, field_end_token
+```
+
+### 4. Attention Processing
+
+#### Attention Extraction Strategy
+- Extract raw attention weights for target field tokens
+- Keep attention weights from field tokens to all previous tokens
+- Do NOT calculate lookback_ratio (as requested)
+- Store original attention matrices
+
+```python
+def process_attentions(attentions, field_start_token, field_end_token):
+    num_layers = len(attentions[0])
+    num_heads = attentions[0][0].shape[1]
+    field_length = field_end_token - field_start_token
+    
+    # Extract attention for target field tokens only
+    field_attentions = []
+    for token_idx in range(field_length):
+        token_attentions = []
+        for layer in range(num_layers):
+            # attentions[token_idx][layer] shape: (batch, heads, seq_len, seq_len)
+            # We want attention from current token to all previous tokens
+            layer_attention = attentions[token_idx][layer][0, :, -1, :field_start_token + token_idx + 1]
+            token_attentions.append(layer_attention)
+        field_attentions.append(token_attentions)
+    
+    return field_attentions
+```
+
+### 5. Data Saving
+
+#### Dual Output Format
+- **PyTorch file (.pt)**: Store attention data, tokens, and metadata
+- **JSONL file**: Store human-readable text records
+
+```python
+# Save to .pt file
+to_save = {
+    'data_index': sample['data_index'],
+    'input_text': input_text,
+    'model_completion': model_completion,
+    'target_field': target_field,
+    'field_attentions': field_attentions,
+    'field_start_token': field_start_token,
+    'field_end_token': field_end_token,
+    'tokenizer_info': tokenizer.name_or_path
+}
+
+# Save to .jsonl file for human inspection
+jsonl_record = {
+    'data_index': sample['data_index'],
+    'input_text': input_text,
+    'model_completion': model_completion,
+    'target_field': target_field
+}
+```
+
+## Functionality Two: Attention Visualization
+
+### 1. Data Loading and Preparation
+
+#### Read Attention Data
+- Load the .pt file generated by functionality one
+- Parse attention data for 10 samples
+- Extract token information and attention matrices
+
+### 2. Heatmap Generation Strategy
+
+#### Visualization Design
+- **X-axis**: All tokens before the target field (prompt + thinking + response prefix)
+- **Y-axis**: Each token in the target field
+- **Color Intensity**: Attention weight values
+- **Dimensions**: Support multiple layers and attention heads
+
+#### Implementation Approach
+```python
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+def create_attention_heatmap(attention_data, tokens, field_tokens):
+    # Create heatmap matrix
+    # Rows: field tokens, Columns: all previous tokens
+    heatmap_matrix = np.array(attention_data)  # Shape: (field_len, prev_tokens)
+    
+    # Create the heatmap
+    plt.figure(figsize=(15, 8))
+    sns.heatmap(heatmap_matrix, 
+                xticklabels=tokens,
+                yticklabels=field_tokens,
+                cmap='Blues',
+                cbar_kws={'label': 'Attention Weight'})
+```
+
+### 3. Boundary Marking
+
+#### Section Boundaries
+Mark different sections with vertical lines:
+- **Prompt End**: Based on original prompt length
+- **Thinking Process End**: Find `<think>` and `</think>` tag positions  
+- **Response Start**: After thinking process ends
+
+```python
+def mark_section_boundaries(prompt_len, thinking_start, thinking_end, response_start):
+    # Add vertical lines to mark boundaries
+    plt.axvline(x=prompt_len, color='red', linestyle='--', alpha=0.7, label='Prompt End')
+    plt.axvline(x=thinking_start, color='green', linestyle='--', alpha=0.7, label='Thinking Start')
+    plt.axvline(x=thinking_end, color='green', linestyle='--', alpha=0.7, label='Thinking End')
+    plt.axvline(x=response_start, color='blue', linestyle='--', alpha=0.7, label='Response Start')
+    plt.legend()
+```
+
+### 4. Enhanced Visualization Features
+
+#### Multi-layer and Multi-head Support
+- Option to visualize specific layers/heads or averaged values
+- Interactive features for exploring different attention patterns
+- Save high-resolution PNG images
+
+#### Additional Features
+```python
+# Average across heads or layers
+def average_attention(attentions, dim='heads'):
+    if dim == 'heads':
+        return np.mean(attentions, axis=1)  # Average across heads
+    elif dim == 'layers':
+        return np.mean(attentions, axis=0)  # Average across layers
+    else:
+        return np.mean(attentions, axis=(0, 1))  # Average across both
+
+# Interactive hover information
+def add_hover_info(fig, tokens, attention_values):
+    # Add hover tooltips showing token and attention value
+    # Implementation depends on chosen visualization library
+    pass
+```
+
+## Implementation Steps
+
+### Step 1: Environment Setup
+1. Configure Alibaba Cloud mirror
+2. Set cache directory to `/root/autodl-tmp`
+3. Install required dependencies
+
+### Step 2: Create extract_attentions.py
+1. Implement model loading with Qwen3 14B
+2. Create data loading function for CSV
+3. Implement field extraction logic
+4. Add attention processing
+5. Implement dual saving format
+
+### Step 3: Create visualization script
+1. Implement data reading from .pt files
+2. Create heatmap generation functions
+3. Add boundary marking features
+4. Implement multi-layer/head visualization options
+
+### Step 4: Testing and Validation
+1. Test with sample data
+2. Verify attention extraction accuracy
+3. Validate visualization correctness
+4. Performance optimization if needed
+
+## File Structure
+
+```
+Lookback-Lens/
+├── extract_attentions.py          # Main extraction script
+├── visualize_attentions.py        # Visualization script  
+├── data/
+│   └── wandb_gemini.csv          # Input CSV data
+├── outputs/
+│   ├── qwen3_attentions.pt       # Attention data
+│   ├── qwen3_records.jsonl       # Text records
+│   └── attention_heatmaps/       # Generated visualizations
+└── implementation_plan.md        # This file
+```
+
+## Dependencies
+
+```
+torch>=2.0.0
+transformers>=4.52.0
+pandas>=1.3.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+numpy>=1.21.0
+```
+
+## Expected Outputs
+
+1. **extract_attentions.py**: 
+   - `qwen3_attentions.pt`: Contains attention matrices and metadata for 10 samples
+   - `qwen3_records.jsonl`: Human-readable text records
+
+2. **visualize_attentions.py**:
+   - PNG files: Attention heatmaps for each sample
+   - Interactive plots (optional): For detailed exploration
+
+This implementation plan provides a comprehensive roadmap for both functionalities while maintaining flexibility for adjustments during development.
