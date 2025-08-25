@@ -11,6 +11,9 @@ import pandas as pd
 import transformers
 from tqdm import tqdm
 import argparse
+import gc
+import datetime
+import shutil
 
 transformers.logging.set_verbosity(40)
 
@@ -53,29 +56,43 @@ def extract_target_field(model_completion, tokenizer):
     Extract the target field: content after the second-to-last ### until newline
     Returns: (target_field_text, field_start_token_idx, field_end_token_idx)
     """
-    # Find all occurrences of ###
+    # Find all occurrences of exactly ### (not #### or more)
     hash_positions = []
     pos = 0
     while pos < len(model_completion):
         pos = model_completion.find('###', pos)
         if pos == -1:
             break
+        
+        # Check if this is exactly ### (not #### or more)
+        # Check character after ### (if exists)
+        if pos + 3 < len(model_completion) and model_completion[pos + 3] == '#':
+            # This is #### or more, skip it
+            pos += 4
+            continue
+        
+        # Check character before ### (if exists) to ensure it's not part of ####
+        if pos > 0 and model_completion[pos - 1] == '#':
+            # This ### is part of #### or more, skip it
+            pos += 3
+            continue
+            
+        # This is exactly ###
         hash_positions.append(pos)
         pos += 3
     
     if len(hash_positions) < 2:
-        print(f"Warning: Found only {len(hash_positions)} ### markers, need at least 2 for second-to-last")
+        print(f"Warning: Found only {len(hash_positions)} exact ### markers (ignoring #### or more), need at least 2 for second-to-last")
         if len(hash_positions) == 1:
             # Fall back to using the only ### found
             target_hash_pos = hash_positions[0]
-            print("Falling back to using the only ### marker found")
+            print("Falling back to using the only exact ### marker found")
         else:
-            print("No ### markers found in model completion")
+            print("No exact ### markers found in model completion (#### or more are ignored)")
             return None, None, None
     else:
         # Use the second-to-last ### marker
         target_hash_pos = hash_positions[-2]
-        print(f"Using second-to-last ### marker at position {target_hash_pos} (out of {len(hash_positions)} total markers)")
     
     # Extract field content (after ### until newline)
     start_pos = target_hash_pos + 3  # Skip ###
@@ -210,17 +227,6 @@ class QwenLLM:
         
         print(f"Generated {len(generated_tokens)} tokens")
         
-        # Debug: Check last few tokens to see why generation stopped
-        print("Last 10 generated tokens:")
-        for i, token_id in enumerate(generated_tokens[-10:]):
-            token_text = self.tokenizer.decode([token_id])
-            print(f"  Token {len(generated_tokens)-10+i}: {token_id} -> {repr(token_text)}")
-        
-        # Check if EOS token was generated
-        if self.tokenizer.eos_token_id in generated_tokens:
-            eos_positions = [i for i, t in enumerate(generated_tokens) if t == self.tokenizer.eos_token_id]
-            print(f"EOS token ({self.tokenizer.eos_token_id}) found at positions: {eos_positions}")
-        
         # 第一阶段完成：返回生成的文本，attention稍后获取
         if return_attentions:
             return generated_text, None, generated_tokens.cpu().numpy()
@@ -305,6 +311,120 @@ class QwenLLM:
                 else:
                     raise e
 
+def setup_output_directory(output_dir, clear_output=False):
+    """Setup output directory and handle existing files"""
+    if os.path.exists(output_dir):
+        if clear_output:
+            print(f"Clearing existing output directory: {output_dir}")
+            shutil.rmtree(output_dir)
+            os.makedirs(output_dir)
+        else:
+            print(f"Output directory already exists: {output_dir}")
+            print("Use --clear-output to remove existing files")
+    else:
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+    
+    return output_dir
+
+def save_sample_results(sample_data, sample_idx, output_dir):
+    """Save individual sample results immediately"""
+    # Generate filenames
+    pt_filename = f"sample_{sample_idx:03d}.pt"
+    log_filename = f"sample_{sample_idx:03d}.log"
+    
+    pt_path = os.path.join(output_dir, pt_filename)
+    log_path = os.path.join(output_dir, log_filename)
+    
+    # Save .pt file
+    torch.save([sample_data], pt_path)
+    print(f"Saved attention data: {pt_path}")
+    
+    # Save .log file
+    with open(log_path, 'w', encoding='utf-8') as f:
+        f.write(f"=== SAMPLE {sample_idx} ===\n")
+        f.write(f"Data Index: {sample_data['data_index']}\n")
+        f.write(f"Original Index: {sample_data['original_index']}\n")
+        f.write(f"Generated Tokens: {len(sample_data['model_completion_ids'])}\n")
+        f.write(f"Target Field: {sample_data['target_field']}\n")
+        f.write(f"Field Start Token: {sample_data['field_start_token']}\n")
+        f.write(f"Field End Token: {sample_data['field_end_token']}\n")
+        f.write(f"Has Attention Data: {sample_data['field_attentions'] is not None}\n")
+        f.write(f"Processing Time: {datetime.datetime.now().isoformat()}\n")
+        f.write("=== CONTEXT ===\n")
+        f.write(sample_data['context'])
+        f.write("\n=== MODEL COMPLETION ===\n")
+        f.write(sample_data['model_completion'])
+        f.write("\n=== END SAMPLE ===\n")
+    
+    print(f"Saved text record: {log_path}")
+    
+    return pt_path, log_path
+
+def save_extraction_summary(output_dir, success_count, failed_count, total_samples, config_args):
+    """Save processing summary and configuration"""
+    # Save summary
+    summary_path = os.path.join(output_dir, "extraction_summary.txt")
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        f.write("Attention Extraction Summary\n")
+        f.write("=" * 40 + "\n")
+        f.write(f"Total samples: {total_samples}\n")
+        f.write(f"Successfully processed: {success_count}\n")
+        f.write(f"Failed samples: {failed_count}\n")
+        f.write(f"Success rate: {success_count/total_samples*100:.1f}%\n")
+        f.write(f"Processing completed: {datetime.datetime.now().isoformat()}\n")
+        f.write("\nGenerated files:\n")
+        for i in range(success_count):
+            f.write(f"  - sample_{i:03d}.pt\n")
+            f.write(f"  - sample_{i:03d}.log\n")
+    
+    # Save configuration
+    config_path = os.path.join(output_dir, "extraction_config.json")
+    config_data = {
+        'model_name': config_args.model_name,
+        'num_samples': config_args.num_samples,
+        'max_new_tokens': config_args.max_new_tokens,
+        'temperature': config_args.temperature,
+        'top_p': config_args.top_p,
+        'top_k': config_args.top_k,
+        'seed': config_args.seed,
+        'data_path': config_args.data_path,
+        'processing_time': datetime.datetime.now().isoformat(),
+        'success_count': success_count,
+        'failed_count': failed_count
+    }
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"Saved processing summary: {summary_path}")
+    print(f"Saved configuration: {config_path}")
+
+def check_existing_samples(output_dir):
+    """Check for existing sample files and return list of completed indices"""
+    if not os.path.exists(output_dir):
+        return []
+    
+    completed_samples = []
+    for filename in os.listdir(output_dir):
+        if filename.startswith('sample_') and filename.endswith('.pt'):
+            try:
+                # Extract sample index from filename
+                idx_str = filename[7:10]  # sample_XXX.pt -> XXX
+                sample_idx = int(idx_str)
+                completed_samples.append(sample_idx)
+            except (ValueError, IndexError):
+                continue
+    
+    completed_samples.sort()
+    return completed_samples
+
+def clean_memory():
+    """Force memory cleanup"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -317,15 +437,19 @@ def main():
     parser.add_argument("--num-gpus", type=str, default="auto")
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
     parser.add_argument("--data-path", type=str, default="data/wandb_gemini.csv")
-    parser.add_argument("--output-path", type=str, default="qwen3_attentions.pt")
-    parser.add_argument("--jsonl-output", type=str, default="qwen3_records.log")
-    parser.add_argument("--num-samples", type=int, default=1)
+    parser.add_argument("--output-dir", type=str, default="results_extraction",
+                       help="Output directory for individual sample files")
+    parser.add_argument("--num-samples", type=int, default=10)
     parser.add_argument("--max-new-tokens", type=int, default=30000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-memory", type=int, default=40)
+    parser.add_argument("--clear-output", action="store_true",
+                       help="Clear existing output directory")
+    parser.add_argument("--resume", action="store_true", 
+                       help="Resume processing from existing files")
     
     args = parser.parse_args()
     
@@ -334,6 +458,17 @@ def main():
     
     # Set random seed
     set_seed(args.seed)
+    
+    # Setup output directory
+    output_dir = setup_output_directory(args.output_dir, args.clear_output)
+    
+    # Check for existing samples if resume is enabled
+    completed_samples = []
+    if args.resume:
+        completed_samples = check_existing_samples(output_dir)
+        if completed_samples:
+            print(f"Found {len(completed_samples)} existing samples: {completed_samples}")
+            print("Will skip already processed samples")
     
     # Check if data file exists
     if not os.path.exists(args.data_path):
@@ -352,9 +487,17 @@ def main():
         max_memory=args.max_memory
     )
     
-    # Process each sample
-    to_save_list = []
+    # Process each sample with immediate saving
+    success_count = 0
+    failed_count = 0
+    
     for idx in tqdm(range(len(list_data_dict)), desc="Processing samples"):
+        # Skip if already processed and resume is enabled
+        if args.resume and idx in completed_samples:
+            print(f"Skipping sample {idx} (already processed)")
+            success_count += 1  # Count as success since it was processed before
+            continue
+            
         sample = list_data_dict[idx]
         
         # Create messages for Qwen
@@ -374,32 +517,26 @@ def main():
             # Convert numpy array to list for serialization
             model_completion_ids = generated_tokens.tolist() if hasattr(generated_tokens, 'tolist') else list(generated_tokens)
             
-            print(f"\nSample {idx} - Model completion preview:")
-            print(model_completion[:500] + "..." if len(model_completion) > 500 else model_completion)
-            
-            # Debug: Check for ### markers
-            hash_positions = []
-            pos = 0
-            while pos < len(model_completion):
-                pos = model_completion.find('###', pos)
-                if pos == -1:
-                    break
-                hash_positions.append(pos)
-                pos += 3
-            print(f"Found {len(hash_positions)} '###' markers at positions: {hash_positions}")
-            
-            # Show content around last ### marker
-            if hash_positions:
-                last_pos = hash_positions[-1]
-                start = max(0, last_pos - 100)
-                end = min(len(model_completion), last_pos + 200)
-                print(f"Content around last '###' marker:")
-                print(repr(model_completion[start:end]))
             
             # Extract target field
             target_field, field_start_token, field_end_token = extract_target_field(
                 model_completion, llm.tokenizer
             )
+            
+            # Show content around extracted field if found
+            if target_field is not None:
+                # Find the field position in the text
+                field_pos = model_completion.rfind(f"### {target_field}")
+                if field_pos == -1:
+                    field_pos = model_completion.rfind(f"###{target_field}")
+                if field_pos == -1:
+                    field_pos = model_completion.rfind(target_field)
+                    
+                if field_pos != -1:
+                    start = max(0, field_pos - 100)
+                    end = min(len(model_completion), field_pos + 200)
+                    print(f"Content around extracted field '{target_field}':")
+                    print(repr(model_completion[start:end]))
             
             # 第二阶段：提取field attention
             field_attentions = None
@@ -417,7 +554,7 @@ def main():
             else:
                 print("跳过attention处理：未找到有效的target field")
             
-            # Prepare data to save
+            # Prepare data to save immediately
             to_save = {
                 'data_index': sample['data_index'],
                 'original_index': sample['original_index'],
@@ -430,33 +567,33 @@ def main():
                 'field_attentions': field_attentions,
                 'tokenizer_info': llm.tokenizer.name_or_path
             }
-            to_save_list.append(to_save)
             
-            # Save to LOG file for inspection (no truncation)
-            mode = 'a' if idx > 0 else 'w'
-            with open(args.jsonl_output, mode, encoding='utf-8') as f:
-                f.write(f"=== SAMPLE {idx} ===\n")
-                f.write(f"Data Index: {sample['data_index']}\n")
-                f.write(f"Original Index: {sample['original_index']}\n")
-                f.write(f"Generated Tokens: {len(generated_tokens)}\n")
-                f.write(f"Target Field: {target_field}\n")
-                f.write("=== CONTEXT ===\n")
-                f.write(sample['context'])
-                f.write("\n=== MODEL COMPLETION ===\n")
-                f.write(model_completion)
-                f.write("\n=== END SAMPLE ===\n\n")
+            # Save sample immediately
+            save_sample_results(to_save, idx, output_dir)
+            success_count += 1
+            
+            # Clean up memory immediately
+            del to_save, field_attentions, model_completion, generated_tokens
+            clean_memory()
             
         except Exception as e:
             print(f"Error processing sample {idx}: {str(e)}")
+            failed_count += 1
+            clean_memory()  # Clean memory even on failure
             continue
     
-    # Save all data to PT file
-    print(f"\nSaving {len(to_save_list)} samples to {args.output_path}")
-    torch.save(to_save_list, args.output_path)
+    # Save processing summary and configuration
+    save_extraction_summary(output_dir, success_count, failed_count, len(list_data_dict), args)
     
-    print(f"Extraction complete! Results saved to:")
-    print(f"  - Attention data: {args.output_path}")
-    print(f"  - Text records: {args.jsonl_output}")
+    print(f"\nExtraction complete!")
+    print(f"Successfully processed: {success_count}/{len(list_data_dict)} samples")
+    print(f"Failed samples: {failed_count}")
+    print(f"Results saved to directory: {output_dir}")
+    print(f"Generated files:")
+    print(f"  - sample_XXX.pt: Individual attention data files")
+    print(f"  - sample_XXX.log: Individual text record files")  
+    print(f"  - extraction_summary.txt: Processing summary")
+    print(f"  - extraction_config.json: Configuration record")
 
 if __name__ == "__main__":
     main()
