@@ -50,17 +50,35 @@ def load_wandb_gemini(file_path="data/wandb_gemini.csv", num_samples=10):
 
 def extract_target_field(model_completion, tokenizer):
     """
-    Extract the target field: content after the last ### until newline
+    Extract the target field: content after the second-to-last ### until newline
     Returns: (target_field_text, field_start_token_idx, field_end_token_idx)
     """
-    # Find last occurrence of ###
-    last_hash_pos = model_completion.rfind('###')
-    if last_hash_pos == -1:
-        print("Warning: No ### found in model completion")
-        return None, None, None
+    # Find all occurrences of ###
+    hash_positions = []
+    pos = 0
+    while pos < len(model_completion):
+        pos = model_completion.find('###', pos)
+        if pos == -1:
+            break
+        hash_positions.append(pos)
+        pos += 3
+    
+    if len(hash_positions) < 2:
+        print(f"Warning: Found only {len(hash_positions)} ### markers, need at least 2 for second-to-last")
+        if len(hash_positions) == 1:
+            # Fall back to using the only ### found
+            target_hash_pos = hash_positions[0]
+            print("Falling back to using the only ### marker found")
+        else:
+            print("No ### markers found in model completion")
+            return None, None, None
+    else:
+        # Use the second-to-last ### marker
+        target_hash_pos = hash_positions[-2]
+        print(f"Using second-to-last ### marker at position {target_hash_pos} (out of {len(hash_positions)} total markers)")
     
     # Extract field content (after ### until newline)
-    start_pos = last_hash_pos + 3  # Skip ###
+    start_pos = target_hash_pos + 3  # Skip ###
     end_pos = model_completion.find('\n', start_pos)
     if end_pos == -1:
         end_pos = len(model_completion)
@@ -235,35 +253,43 @@ class QwenLLM:
                 return None
             
             try:
-                # 前向传播获取attention
+                print(f"使用优化的attention计算，只计算target field tokens的attention")
+                print(f"显存优化：从O(n²)={seq_len}²降低到O(k×n)={field_end_token-field_start_token}×{seq_len}")
+                
+                # 前向传播获取attention，传递target_field_range实现显存优化
                 outputs = self.model(
                     **inputs,
                     output_attentions=True,
-                    use_cache=False  # 减少显存使用
+                    use_cache=False,  # 减少显存使用
+                    target_field_range=(field_start_token, field_end_token)  # 关键优化参数
                 )
                 
                 if outputs.attentions is None:
                     print("Warning: No attentions returned from forward pass")
                     return None
                 
-                # 提取field相关的attention切片
+                # 现在attentions已经是优化后的切片，形状为[heads, field_length, seq_len]
                 field_attentions = []
                 num_layers = len(outputs.attentions)
                 print(f"Processing {num_layers} attention layers")
                 
                 for layer_idx in range(num_layers):
-                    layer_attn = outputs.attentions[layer_idx][0]  # [heads, seq_len, seq_len]
+                    # attention已经是field相关的切片，无需再次切片
+                    layer_attn = outputs.attentions[layer_idx][0]  # [heads, field_length, seq_len]
                     
-                    # 只保存field tokens对之前tokens的attention
-                    # 形状: [heads, field_length, prev_tokens]
-                    field_slice = layer_attn[:, field_start_token:field_end_token, :field_end_token]
+                    # 如果只需要对之前tokens的attention，可以进一步切片
+                    # field_slice = layer_attn[:, :, :field_end_token]  # [heads, field_length, prev_tokens]
+                    field_slice = layer_attn  # 保留完整的field attention
                     
-                    # 转换为CPU并使用float16节省内存
-                    field_slice = field_slice.cpu().half()
+                    # 保持在GPU上且使用float32精度以获得最佳质量
+                    # field_slice = field_slice.cpu().half()  # 原始压缩版本
                     field_attentions.append(field_slice)
                 
                 print(f"成功提取 {len(field_attentions)} 层的field attention")
-                print(f"每层attention形状: {field_attentions[0].shape}")
+                if field_attentions:
+                    print(f"每层attention形状: {field_attentions[0].shape}")
+                    expected_shape = f"[{field_attentions[0].shape[0]}, {field_end_token-field_start_token}, {seq_len}]"
+                    print(f"预期形状: [num_heads, field_length, seq_len] = {expected_shape}")
                 
                 # 立即清理显存
                 torch.cuda.empty_cache()

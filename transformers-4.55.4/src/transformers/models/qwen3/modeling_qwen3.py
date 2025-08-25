@@ -136,11 +136,49 @@ def eager_attention_forward(
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
+    target_field_range: Optional[tuple] = None,
     **kwargs: Unpack[TransformersKwargs],
 ):
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
+    # Optimized computation for target field tokens only
+    if target_field_range is not None:
+        start_idx, end_idx = target_field_range
+        seq_len = query.shape[2]
+        
+        # Validate range
+        if start_idx >= seq_len or end_idx > seq_len or start_idx >= end_idx:
+            print(f"Warning: Invalid target_field_range ({start_idx}, {end_idx}) for sequence length {seq_len}")
+            target_field_range = None
+        else:
+            # Only compute attention for target tokens
+            target_query = query[:, :, start_idx:end_idx, :]  # [batch, heads, target_len, head_dim]
+            
+            # Compute attention weights only for target tokens: [batch, heads, target_len, seq_len]
+            attn_weights = torch.matmul(target_query, key_states.transpose(2, 3)) * scaling
+            
+            if attention_mask is not None:
+                # Extract mask slice for target tokens
+                causal_mask = attention_mask[:, :, start_idx:end_idx, : key_states.shape[-2]]
+                attn_weights = attn_weights + causal_mask
+
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+            attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+            
+            # Compute output only for target tokens
+            target_attn_output = torch.matmul(attn_weights, value_states)  # [batch, heads, target_len, head_dim]
+            
+            # Create full-size output tensor and fill only target positions
+            attn_output = torch.zeros_like(query)  # [batch, heads, seq_len, head_dim]
+            attn_output[:, :, start_idx:end_idx, :] = target_attn_output
+            
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            
+            # Return only target attention weights for memory efficiency
+            return attn_output, attn_weights
+
+    # Original full attention computation (fallback)
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
@@ -211,6 +249,9 @@ class Qwen3Attention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+        # Extract target_field_range from kwargs if available
+        target_field_range = kwargs.pop('target_field_range', None)
+        
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
@@ -220,6 +261,7 @@ class Qwen3Attention(nn.Module):
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
             sliding_window=self.sliding_window,  # diff with Llama
+            target_field_range=target_field_range,
             **kwargs,
         )
 

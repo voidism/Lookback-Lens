@@ -152,43 +152,61 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     
     return fig
 
-def average_attention_across_heads(field_attentions: List[List], method: str = 'mean') -> np.ndarray:
+def average_attention_across_heads(field_attentions: List, method: str = 'mean') -> np.ndarray:
     """
     Average attention weights across heads and layers
-    field_attentions: List[List[tensor]] - [token][layer][heads, prev_tokens]
+    
+    Args:
+        field_attentions: List[tensor] - [layer][heads, field_length, seq_len]
+        method: 'mean' or 'max' for aggregation method
+        
+    Returns:
+        np.ndarray: [field_length, seq_len] - averaged attention matrix
     """
     if not field_attentions:
         return np.array([])
     
-    num_tokens = len(field_attentions)
-    num_layers = len(field_attentions[0])
+    print(f"Processing {len(field_attentions)} layers of attention data")
     
-    # Convert to numpy and average
-    attention_matrices = []
+    # Convert tensors to numpy arrays for processing
+    layer_attentions = []
     
-    for token_idx in range(num_tokens):
-        token_attentions = []
-        for layer_idx in range(num_layers):
-            layer_attention = field_attentions[token_idx][layer_idx].numpy()  # Shape: [heads, prev_tokens]
-            if method == 'mean':
-                averaged = np.mean(layer_attention, axis=0)  # Average across heads
-            elif method == 'max':
-                averaged = np.max(layer_attention, axis=0)
-            else:
-                averaged = np.mean(layer_attention, axis=0)
-            token_attentions.append(averaged)
-        
-        # Average across layers
-        if method == 'mean':
-            final_attention = np.mean(token_attentions, axis=0)
-        elif method == 'max':
-            final_attention = np.max(token_attentions, axis=0)
+    for layer_idx, layer_attention in enumerate(field_attentions):
+        # layer_attention shape: [heads, field_length, seq_len]
+        if hasattr(layer_attention, 'numpy'):
+            layer_attn_np = layer_attention.numpy()
+        elif hasattr(layer_attention, 'cpu'):
+            layer_attn_np = layer_attention.cpu().numpy()
         else:
-            final_attention = np.mean(token_attentions, axis=0)
+            layer_attn_np = np.array(layer_attention)
             
-        attention_matrices.append(final_attention)
+        print(f"Layer {layer_idx} attention shape: {layer_attn_np.shape}")
+        
+        # Average across heads: [heads, field_length, seq_len] -> [field_length, seq_len]
+        if method == 'mean':
+            head_averaged = np.mean(layer_attn_np, axis=0)
+        elif method == 'max':
+            head_averaged = np.max(layer_attn_np, axis=0)
+        else:
+            head_averaged = np.mean(layer_attn_np, axis=0)
+            
+        layer_attentions.append(head_averaged)
     
-    return np.array(attention_matrices)
+    # Stack all layers: List[[field_length, seq_len]] -> [num_layers, field_length, seq_len]
+    stacked_attentions = np.stack(layer_attentions, axis=0)
+    print(f"Stacked attention shape: {stacked_attentions.shape}")
+    
+    # Average across layers: [num_layers, field_length, seq_len] -> [field_length, seq_len]
+    if method == 'mean':
+        final_attention = np.mean(stacked_attentions, axis=0)
+    elif method == 'max':
+        final_attention = np.max(stacked_attentions, axis=0)
+    else:
+        final_attention = np.mean(stacked_attentions, axis=0)
+    
+    print(f"Final attention matrix shape: {final_attention.shape}")
+    
+    return final_attention
 
 def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: int):
     """Visualize attention for a single sample"""
@@ -207,7 +225,10 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
         return
     
     print(f"Target field: '{target_field}'")
-    print(f"Field has {len(field_attentions)} tokens")
+    print(f"Attention data has {len(field_attentions)} layers")
+    if field_attentions:
+        field_length = field_attentions[0].shape[1]  # [heads, field_length, seq_len]
+        print(f"Target field has {field_length} tokens")
     
     # Get token strings
     all_tokens, context_length = get_token_strings(tokenizer, model_completion_ids, context)
