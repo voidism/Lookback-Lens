@@ -8,6 +8,8 @@ import re
 import glob
 from typing import List, Tuple, Optional
 from transformers import AutoTokenizer
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 
 def discover_sample_files(data_dir: str):
     """Discover all sample_*.pt files in the directory"""
@@ -98,30 +100,103 @@ def get_token_strings(tokenizer, model_completion_ids: List[int], context: str) 
     
     return all_token_strings, context_length
 
+def apply_attention_optimization(attention_matrix: np.ndarray, title_suffix: str = "", force_consistent: bool = True) -> Tuple[np.ndarray, str]:
+    """
+    Apply consistent optimization strategy for both mean and max attention matrices
+    
+    Args:
+        force_consistent: If True, always use the same color scheme for both versions
+    
+    Returns:
+        Tuple of (processed_matrix, colorbar_label, cmap[, vmin, vmax])
+    """
+    # Analyze Y-axis variation
+    y_variance_mean = 0  # Default value for single row case
+    if attention_matrix.shape[0] > 1:
+        y_variance = np.var(attention_matrix, axis=1)  # variance across X-axis for each Y
+        y_variance_mean = np.mean(y_variance)
+        y_variance_max = np.max(y_variance)
+        print(f"Y-axis variation{title_suffix}: mean_var={y_variance_mean:.8f}, max_var={y_variance_max:.8f}")
+        
+        # Additional diagnostics for Y-axis differences
+        row_correlations = []
+        for i in range(attention_matrix.shape[0]):
+            for j in range(i+1, attention_matrix.shape[0]):
+                corr = np.corrcoef(attention_matrix[i], attention_matrix[j])[0, 1]
+                row_correlations.append(corr)
+        if row_correlations:
+            print(f"Target field token correlations{title_suffix}: mean={np.mean(row_correlations):.4f}, range=[{np.min(row_correlations):.4f}, {np.max(row_correlations):.4f}]")
+    
+    # Enhanced normalization strategy for weak Y-axis variation
+    vmin, vmax = np.percentile(attention_matrix, [1, 99])  # Use more extreme percentiles
+    
+    if force_consistent:
+        # Always use row-wise normalization for consistency between mean and max versions
+        if attention_matrix.shape[0] > 1:
+            print(f"Applying consistent row-wise normalization{title_suffix}")
+            normalized_matrix = np.zeros_like(attention_matrix)
+            for i in range(attention_matrix.shape[0]):
+                row = attention_matrix[i]
+                row_min, row_max = np.percentile(row, [1, 99])  # Use extreme percentiles for better contrast
+                if row_max > row_min:
+                    normalized_matrix[i] = (row - row_min) / (row_max - row_min)
+                else:
+                    normalized_matrix[i] = row
+            return normalized_matrix, 'Row-wise Normalized Attention', 'RdYlBu_r', 0, 1
+        else:
+            # Single row case - use standard normalization
+            return attention_matrix, 'Attention Weight', 'RdYlBu_r', vmin, vmax
+    else:
+        # Original adaptive strategy (kept for reference)
+        # Option 1: For very small values, use log scale with stronger enhancement
+        if vmax < 0.01:
+            log_matrix = np.log10(attention_matrix + 1e-8)
+            return log_matrix, 'Log10(Attention Weight + 1e-8)', 'viridis'
+        # Option 2: Use row-wise normalization to enhance Y-axis differences
+        elif attention_matrix.shape[0] > 1 and y_variance_mean < 1e-6:
+            print(f"Applying row-wise normalization to enhance Y-axis variation{title_suffix}")
+            normalized_matrix = np.zeros_like(attention_matrix)
+            for i in range(attention_matrix.shape[0]):
+                row = attention_matrix[i]
+                row_min, row_max = np.percentile(row, [1, 99])  # Use extreme percentiles for better contrast
+                if row_max > row_min:
+                    normalized_matrix[i] = (row - row_min) / (row_max - row_min)
+                else:
+                    normalized_matrix[i] = row
+            return normalized_matrix, 'Row-wise Normalized Attention', 'RdYlBu_r', 0, 1
+        else:
+            # Use percentile normalization with enhanced colormap
+            return attention_matrix, 'Attention Weight', 'plasma', vmin, vmax
+
 def create_attention_heatmap(attention_matrix: np.ndarray, 
                            all_tokens: List[str],
                            field_tokens: List[str],
                            boundaries: Tuple[int, int, int, int],
                            title: str = "Attention Heatmap",
                            figsize: Tuple[int, int] = (20, 8),
-                           max_tokens_display: int = 100) -> plt.Figure:
+                           interpolation_factor: int = 4,
+                           smooth_sigma: float = 0.8) -> plt.Figure:
     """
-    Create attention heatmap with section boundaries marked
+    Create attention heatmap with section boundaries marked and continuous interpolation
     """
     prompt_end, thinking_start, thinking_end, response_start = boundaries
     
-    # Limit display tokens if too many
-    if len(all_tokens) > max_tokens_display:
-        step = len(all_tokens) // max_tokens_display
-        display_tokens = all_tokens[::step]
-        attention_matrix = attention_matrix[:, ::step]
-        # Adjust boundaries accordingly
-        prompt_end = prompt_end // step
-        thinking_start = thinking_start // step if thinking_start > 0 else -1
-        thinking_end = thinking_end // step if thinking_end > 0 else -1
-        response_start = response_start // step
-    else:
-        display_tokens = all_tokens
+    # Apply interpolation to create continuous visualization
+    interpolated_matrix = interpolate_attention_matrix(attention_matrix, 
+                                                      interpolation_factor=interpolation_factor,
+                                                      smooth_sigma=smooth_sigma)
+    
+    # Use all tokens without sampling
+    display_tokens = all_tokens
+    original_seq_len = len(all_tokens)
+    interpolated_seq_len = interpolated_matrix.shape[1]
+    
+    # Scale boundaries to interpolated coordinates
+    scale_factor = interpolated_seq_len / original_seq_len
+    prompt_end_scaled = int(prompt_end * scale_factor)
+    thinking_start_scaled = int(thinking_start * scale_factor) if thinking_start > 0 else -1
+    thinking_end_scaled = int(thinking_end * scale_factor) if thinking_end > 0 else -1
+    response_start_scaled = int(response_start * scale_factor)
     
     # Clean token strings for display
     clean_tokens = []
@@ -135,45 +210,71 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     # Create figure
     fig, ax = plt.subplots(figsize=figsize)
     
-    # Create heatmap
-    im = ax.imshow(attention_matrix, cmap='Blues', aspect='auto', interpolation='nearest')
+    # Apply consistent optimization strategy
+    print(f"Attention matrix stats: min={np.min(interpolated_matrix):.6f}, max={np.max(interpolated_matrix):.6f}, mean={np.mean(interpolated_matrix):.6f}")
+    
+    # Get the title suffix for diagnostics
+    title_suffix = " (from interpolated matrix)"
+    if "Max" in title:
+        title_suffix = " (Max pooled)"
+    elif "Mean" in title or "Continuous" in title:
+        title_suffix = " (Mean pooled)"
+        
+    # Apply optimization and get display parameters
+    optimization_result = apply_attention_optimization(interpolated_matrix, title_suffix)
+    
+    if len(optimization_result) == 3:
+        display_matrix, cbar_label, cmap = optimization_result
+        im = ax.imshow(display_matrix, cmap=cmap, aspect='auto', interpolation='bilinear')
+    else:  # len == 5
+        display_matrix, cbar_label, cmap, vmin, vmax = optimization_result
+        im = ax.imshow(display_matrix, cmap=cmap, aspect='auto', interpolation='bilinear',
+                      vmin=vmin, vmax=vmax)
     
     # Set labels
     ax.set_xlabel('Input Tokens (Context + Thinking + Response)', fontsize=12)
     ax.set_ylabel('Target Field Tokens', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
     
-    # Set tick labels
-    if len(clean_tokens) <= 50:  # Only show token labels if not too many
-        ax.set_xticks(range(len(clean_tokens)))
-        ax.set_xticklabels(clean_tokens, rotation=45, ha='right', fontsize=8)
+    # Set tick labels - map original token positions to interpolated coordinates
+    max_labels = 50 if len(clean_tokens) <= 50 else 20
+    
+    if len(clean_tokens) <= max_labels:
+        # Show all tokens
+        token_indices = range(len(clean_tokens))
+        selected_tokens = clean_tokens
     else:
-        # Show every nth token
-        n = len(clean_tokens) // 20
-        indices = range(0, len(clean_tokens), n)
-        ax.set_xticks(indices)
-        ax.set_xticklabels([clean_tokens[i] for i in indices], rotation=45, ha='right', fontsize=8)
+        # Show evenly spaced tokens
+        step = len(clean_tokens) // max_labels
+        token_indices = range(0, len(clean_tokens), step)
+        selected_tokens = [clean_tokens[i] for i in token_indices]
+    
+    # Map original token positions to interpolated coordinates
+    interpolated_positions = [int(i * scale_factor) for i in token_indices]
+    
+    ax.set_xticks(interpolated_positions)
+    ax.set_xticklabels(selected_tokens, rotation=45, ha='right', fontsize=8)
     
     if len(field_tokens) <= 20:
         ax.set_yticks(range(len(field_tokens)))
         ax.set_yticklabels(field_tokens, fontsize=10)
     
-    # Add section boundary lines
-    if prompt_end > 0:
-        ax.axvline(x=prompt_end-0.5, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Prompt End')
+    # Add section boundary lines using scaled coordinates
+    if prompt_end_scaled > 0:
+        ax.axvline(x=prompt_end_scaled-0.5, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Prompt End')
     
-    if thinking_start > 0:
-        ax.axvline(x=thinking_start-0.5, color='green', linestyle='--', linewidth=2, alpha=0.8, label='Thinking Start')
+    if thinking_start_scaled > 0:
+        ax.axvline(x=thinking_start_scaled-0.5, color='green', linestyle='--', linewidth=2, alpha=0.8, label='Thinking Start')
     
-    if thinking_end > 0:
-        ax.axvline(x=thinking_end-0.5, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='Thinking End')
+    if thinking_end_scaled > 0:
+        ax.axvline(x=thinking_end_scaled-0.5, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='Thinking End')
     
-    if response_start < len(display_tokens):
-        ax.axvline(x=response_start-0.5, color='blue', linestyle='--', linewidth=2, alpha=0.8, label='Response Start')
+    if response_start_scaled < interpolated_seq_len:
+        ax.axvline(x=response_start_scaled-0.5, color='blue', linestyle='--', linewidth=2, alpha=0.8, label='Response Start')
     
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Attention Weight', rotation=270, labelpad=15)
+    cbar.set_label(cbar_label, rotation=270, labelpad=15)
     
     # Add legend
     ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
@@ -182,6 +283,53 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     plt.tight_layout()
     
     return fig
+
+def interpolate_attention_matrix(attention_matrix: np.ndarray, interpolation_factor: int = 4, 
+                                smooth_sigma: float = 0.8) -> np.ndarray:
+    """
+    Interpolate attention matrix along x-axis (sequence dimension) to create continuous visualization
+    
+    Args:
+        attention_matrix: [field_length, seq_len] attention matrix
+        interpolation_factor: factor to increase resolution (default: 4x)
+        smooth_sigma: gaussian smoothing parameter (0 = no smoothing)
+    
+    Returns:
+        np.ndarray: [field_length, seq_len * interpolation_factor] interpolated matrix
+    """
+    if attention_matrix.size == 0:
+        return attention_matrix
+    
+    # Convert to float32 to ensure compatibility with scipy functions
+    attention_matrix = attention_matrix.astype(np.float32)
+    
+    field_length, seq_len = attention_matrix.shape
+    
+    # Create new x coordinates with higher resolution
+    original_x = np.arange(seq_len)
+    new_x = np.linspace(0, seq_len - 1, seq_len * interpolation_factor)
+    
+    # Interpolate each row (each target field token's attention)
+    interpolated_matrix = np.zeros((field_length, len(new_x)))
+    
+    for i in range(field_length):
+        attention_row = attention_matrix[i, :]
+        
+        # Apply gaussian smoothing before interpolation if specified
+        if smooth_sigma > 0:
+            attention_row = gaussian_filter1d(attention_row, sigma=smooth_sigma)
+        
+        # Create interpolation function
+        f_interp = interp1d(original_x, attention_row, kind='cubic', 
+                           bounds_error=False, fill_value='extrapolate')
+        
+        # Interpolate to new x coordinates
+        interpolated_matrix[i, :] = f_interp(new_x)
+        
+        # Ensure non-negative values (attention weights should be >= 0)
+        interpolated_matrix[i, :] = np.maximum(interpolated_matrix[i, :], 0)
+    
+    return interpolated_matrix
 
 def average_attention_across_heads(field_attentions: List, method: str = 'mean') -> np.ndarray:
     """
@@ -284,14 +432,16 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
     print(f"Attention matrix shape: {attention_matrix.shape}")
     
     # Create visualization
-    title = f"Sample {sample_idx}: Attention from Target Field to Previous Tokens"
+    title = f"Sample {sample_idx}: Attention from Target Field to Previous Tokens (Continuous)"
     fig = create_attention_heatmap(
         attention_matrix=attention_matrix,
         all_tokens=all_tokens,
         field_tokens=field_token_strings,
         boundaries=boundaries,
         title=title,
-        figsize=(25, 10)
+        figsize=(25, 10),
+        interpolation_factor=4,
+        smooth_sigma=0.8
     )
     
     # Save figure
@@ -303,14 +453,16 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
     
     # Also create a simplified version with max pooling
     attention_matrix_max = average_attention_across_heads(field_attentions, method='max')
-    title_max = f"Sample {sample_idx}: Max Attention from Target Field to Previous Tokens"
+    title_max = f"Sample {sample_idx}: Max Attention from Target Field to Previous Tokens (Continuous)"
     fig_max = create_attention_heatmap(
         attention_matrix=attention_matrix_max,
         all_tokens=all_tokens,
         field_tokens=field_token_strings,
         boundaries=boundaries,
         title=title_max,
-        figsize=(25, 10)
+        figsize=(25, 10),
+        interpolation_factor=4,
+        smooth_sigma=0.8
     )
     
     output_path_max = os.path.join(output_dir, f"attention_heatmap_sample_{sample_idx}_max.png")
@@ -410,7 +562,7 @@ def main():
                        help="Directory to save visualization outputs")
     parser.add_argument("--tokenizer-name", type=str, default="Qwen/Qwen3-14B",
                        help="Tokenizer name for decoding tokens")
-    parser.add_argument("--max-samples", type=int, default=None,
+    parser.add_argument("--max-samples", type=int, default=1,
                        help="Maximum number of samples to visualize (default: all)")
     
     args = parser.parse_args()

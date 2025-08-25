@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+results_extraction/
 
 # C extensions
 *.so
