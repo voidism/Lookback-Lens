@@ -100,13 +100,13 @@ def get_token_strings(tokenizer, model_completion_ids: List[int], context: str) 
     
     return all_token_strings, context_length
 
-def apply_attention_optimization(attention_matrix: np.ndarray, title_suffix: str = "", force_consistent: bool = True) -> Tuple[np.ndarray, str]:
+def apply_attention_optimization(attention_matrix: np.ndarray, title_suffix: str = "", is_mean_version: bool = False) -> Tuple[np.ndarray, str]:
     """
-    Apply consistent optimization strategy for both mean and max attention matrices
+    Apply optimization strategy, with mean version forced to match max version behavior
     
     Args:
-        force_consistent: If True, always use the same color scheme for both versions
-    
+        is_mean_version: If True, force mean version to use same strategy as max version
+        
     Returns:
         Tuple of (processed_matrix, colorbar_label, cmap[, vmin, vmax])
     """
@@ -130,43 +130,32 @@ def apply_attention_optimization(attention_matrix: np.ndarray, title_suffix: str
     # Enhanced normalization strategy for weak Y-axis variation
     vmin, vmax = np.percentile(attention_matrix, [1, 99])  # Use more extreme percentiles
     
-    if force_consistent:
-        # Always use row-wise normalization for consistency between mean and max versions
-        if attention_matrix.shape[0] > 1:
-            print(f"Applying consistent row-wise normalization{title_suffix}")
-            normalized_matrix = np.zeros_like(attention_matrix)
-            for i in range(attention_matrix.shape[0]):
-                row = attention_matrix[i]
-                row_min, row_max = np.percentile(row, [1, 99])  # Use extreme percentiles for better contrast
-                if row_max > row_min:
-                    normalized_matrix[i] = (row - row_min) / (row_max - row_min)
-                else:
-                    normalized_matrix[i] = row
-            return normalized_matrix, 'Row-wise Normalized Attention', 'RdYlBu_r', 0, 1
-        else:
-            # Single row case - use standard normalization
-            return attention_matrix, 'Attention Weight', 'RdYlBu_r', vmin, vmax
+    # Make both versions use the same colormap strategy
+    if is_mean_version:
+        print(f"Forcing mean version to use same colormap as max version{title_suffix}")
+        # Force mean version to use plasma colormap like max version
+        return attention_matrix, 'Attention Weight', 'plasma', vmin, vmax
+    
+    # Original adaptive strategy for max version  
+    # Option 1: For very small values, use log scale with stronger enhancement
+    if vmax < 0.01:
+        log_matrix = np.log10(attention_matrix + 1e-8)
+        return log_matrix, 'Log10(Attention Weight + 1e-8)', 'viridis'
+    # Option 2: Use row-wise normalization to enhance Y-axis differences
+    elif attention_matrix.shape[0] > 1 and y_variance_mean < 1e-6:
+        print(f"Applying row-wise normalization to enhance Y-axis variation{title_suffix}")
+        normalized_matrix = np.zeros_like(attention_matrix)
+        for i in range(attention_matrix.shape[0]):
+            row = attention_matrix[i]
+            row_min, row_max = np.percentile(row, [1, 99])  # Use extreme percentiles for better contrast
+            if row_max > row_min:
+                normalized_matrix[i] = (row - row_min) / (row_max - row_min)
+            else:
+                normalized_matrix[i] = row
+        return normalized_matrix, 'Row-wise Normalized Attention', 'RdYlBu_r', 0, 1
     else:
-        # Original adaptive strategy (kept for reference)
-        # Option 1: For very small values, use log scale with stronger enhancement
-        if vmax < 0.01:
-            log_matrix = np.log10(attention_matrix + 1e-8)
-            return log_matrix, 'Log10(Attention Weight + 1e-8)', 'viridis'
-        # Option 2: Use row-wise normalization to enhance Y-axis differences
-        elif attention_matrix.shape[0] > 1 and y_variance_mean < 1e-6:
-            print(f"Applying row-wise normalization to enhance Y-axis variation{title_suffix}")
-            normalized_matrix = np.zeros_like(attention_matrix)
-            for i in range(attention_matrix.shape[0]):
-                row = attention_matrix[i]
-                row_min, row_max = np.percentile(row, [1, 99])  # Use extreme percentiles for better contrast
-                if row_max > row_min:
-                    normalized_matrix[i] = (row - row_min) / (row_max - row_min)
-                else:
-                    normalized_matrix[i] = row
-            return normalized_matrix, 'Row-wise Normalized Attention', 'RdYlBu_r', 0, 1
-        else:
-            # Use percentile normalization with enhanced colormap
-            return attention_matrix, 'Attention Weight', 'plasma', vmin, vmax
+        # Use percentile normalization with enhanced colormap
+        return attention_matrix, 'Attention Weight', 'plasma', vmin, vmax
 
 def create_attention_heatmap(attention_matrix: np.ndarray, 
                            all_tokens: List[str],
@@ -213,15 +202,20 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     # Apply consistent optimization strategy
     print(f"Attention matrix stats: min={np.min(interpolated_matrix):.6f}, max={np.max(interpolated_matrix):.6f}, mean={np.mean(interpolated_matrix):.6f}")
     
-    # Get the title suffix for diagnostics
+    # Get the title suffix for diagnostics and version info
     title_suffix = " (from interpolated matrix)"
+    is_mean_version = False
+    print(f"Debug: Title is '{title}'")
     if "Max" in title:
         title_suffix = " (Max pooled)"
+        print("Debug: Detected MAX version")
     elif "Mean" in title or "Continuous" in title:
         title_suffix = " (Mean pooled)"
+        is_mean_version = True
+        print("Debug: Detected MEAN version - will force consistent coloring")
         
     # Apply optimization and get display parameters
-    optimization_result = apply_attention_optimization(interpolated_matrix, title_suffix)
+    optimization_result = apply_attention_optimization(interpolated_matrix, title_suffix, is_mean_version)
     
     if len(optimization_result) == 3:
         display_matrix, cbar_label, cmap = optimization_result
@@ -259,18 +253,12 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
         ax.set_yticks(range(len(field_tokens)))
         ax.set_yticklabels(field_tokens, fontsize=10)
     
-    # Add section boundary lines using scaled coordinates
+    # Add section boundary lines - only show Prompt End and Thinking End
     if prompt_end_scaled > 0:
-        ax.axvline(x=prompt_end_scaled-0.5, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Prompt End')
-    
-    if thinking_start_scaled > 0:
-        ax.axvline(x=thinking_start_scaled-0.5, color='green', linestyle='--', linewidth=2, alpha=0.8, label='Thinking Start')
+        ax.axvline(x=prompt_end_scaled-0.5, color='cyan', linestyle='--', linewidth=2, alpha=0.8, label='Prompt End')
     
     if thinking_end_scaled > 0:
-        ax.axvline(x=thinking_end_scaled-0.5, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='Thinking End')
-    
-    if response_start_scaled < interpolated_seq_len:
-        ax.axvline(x=response_start_scaled-0.5, color='blue', linestyle='--', linewidth=2, alpha=0.8, label='Response Start')
+        ax.axvline(x=thinking_end_scaled-0.5, color='cyan', linestyle='--', linewidth=2, alpha=0.8, label='Thinking End')
     
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax)

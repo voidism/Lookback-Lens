@@ -266,7 +266,7 @@ class QwenLLM:
                 outputs = self.model(
                     **inputs,
                     output_attentions=True,
-                    use_cache=False,  # 减少显存使用
+                    use_cache=True,  # 减少显存使用
                     target_field_range=(field_start_token, field_end_token)  # 关键优化参数
                 )
                 
@@ -440,7 +440,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="results_extraction",
                        help="Output directory for individual sample files")
     parser.add_argument("--num-samples", type=int, default=10)
-    parser.add_argument("--max-new-tokens", type=int, default=30000)
+    parser.add_argument("--max-new-tokens", type=int, default=50000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)
