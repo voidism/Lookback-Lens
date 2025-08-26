@@ -148,6 +148,83 @@ Accuracy: 0.586
 (the result may vary due to the randomness of GPT-4o API and the randomness of sampling)
 ```
 
+## Qwen3 Attention Analysis 🔍
+
+This codebase also includes tools for analyzing attention patterns in Qwen3 models with thinking mode enabled.
+
+### Extract Qwen3 Attention Weights
+
+Extract attention weights from Qwen3 model with thinking mode and target field analysis:
+
+```bash
+# Basic extraction with default settings
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --output-dir results_extraction --num-samples 10
+
+# With custom parameters and memory optimization
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --output-dir results_extraction --num-samples 5 --max-new-tokens 40000 --temperature 0.6 --top-p 0.95 --top-k 20 --seed 42 --max-memory 40
+
+# Resume from existing files (skip already processed samples)
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --output-dir results_extraction --resume
+
+# Clear existing output directory before starting
+python extract_attentions.py --model-name Qwen/Qwen3-14B --data-path data/wandb_gemini.csv --output-dir results_extraction --clear-output
+```
+
+**Key Features:**
+- **Smart Target Field Detection**: Automatically identifies and focuses on specific text segments marked with `###`
+- **Memory Optimization**: Two-stage processing to minimize GPU memory usage during attention extraction
+- **Thinking Mode Support**: Works with Qwen3's built-in thinking mode (`<think>...</think>`)
+- **Resume Capability**: Skip already processed samples when resuming interrupted runs
+- **Individual File Output**: Saves each sample as separate `.pt` (data) and `.log` (metadata) files
+
+**Output Structure:**
+```
+results_extraction/
+├── sample_000.pt          # Attention data for sample 0
+├── sample_000.log         # Text record and metadata for sample 0
+├── sample_001.pt          # Attention data for sample 1
+├── sample_001.log         # Text record and metadata for sample 1
+├── ...
+├── extraction_summary.txt # Processing summary
+└── extraction_config.json # Configuration record
+```
+
+### Visualize Attention Heatmaps
+
+Generate attention visualization heatmaps from extracted data:
+
+```bash
+# Visualize all samples in the extraction directory
+python visualize_attentions.py --data-path results_extraction --output-dir attention_visualizations --tokenizer-name Qwen/Qwen3-14B
+
+# Limit number of samples to visualize
+python visualize_attentions.py --data-path results_extraction --output-dir attention_visualizations --tokenizer-name Qwen/Qwen3-14B --max-samples 5
+```
+
+**Visualization Features:**
+- **Section Boundaries**: Clearly marks Prompt, Thinking, and Response sections
+- **Continuous Interpolation**: Smooth attention patterns using cubic interpolation and Gaussian smoothing
+- **Dual Visualization**: Generates both mean-pooled and max-pooled attention heatmaps
+- **Smart Color Mapping**: Adaptive colormaps and normalization for optimal visual contrast
+- **Statistical Analysis**: Provides summary statistics and distribution plots
+
+**Output Files:**
+```
+attention_visualizations/
+├── attention_heatmap_sample_0.png        # Mean-pooled attention heatmap
+├── attention_heatmap_sample_0_max.png    # Max-pooled attention heatmap
+├── attention_heatmap_sample_1.png
+├── attention_heatmap_sample_1_max.png
+├── ...
+├── summary_statistics.png               # Overview statistics plots
+└── summary.txt                          # Text summary of analysis
+```
+
+**Data Requirements:**
+- Input CSV should contain `prompt` and `conv_num` columns
+- Samples with `conv_num=2` are automatically filtered and processed
+- Target fields should be marked with exactly `###` (not `####` or more)
+
 # Citation
 
 Please cite our paper if it's helpful to your work!

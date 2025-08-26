@@ -53,9 +53,13 @@ def load_wandb_gemini(file_path="data/wandb_gemini.csv", num_samples=10):
 
 def extract_target_field(model_completion, tokenizer):
     """
-    Extract the target field: content after the second-to-last ### until newline
+    Extract the target field with smart selection logic:
+    - If last ### field has <= 3 English words: use second-to-last ### field
+    - Otherwise: use last ### field
     Returns: (target_field_text, field_start_token_idx, field_end_token_idx)
     """
+    import re
+    
     # Find all occurrences of exactly ### (not #### or more)
     hash_positions = []
     pos = 0
@@ -81,18 +85,37 @@ def extract_target_field(model_completion, tokenizer):
         hash_positions.append(pos)
         pos += 3
     
-    if len(hash_positions) < 2:
-        print(f"Warning: Found only {len(hash_positions)} exact ### markers (ignoring #### or more), need at least 2 for second-to-last")
-        if len(hash_positions) == 1:
-            # Fall back to using the only ### found
-            target_hash_pos = hash_positions[0]
-            print("Falling back to using the only exact ### marker found")
-        else:
-            print("No exact ### markers found in model completion (#### or more are ignored)")
-            return None, None, None
+    if len(hash_positions) == 0:
+        print("No exact ### markers found in model completion (#### or more are ignored)")
+        return None, None, None
+    elif len(hash_positions) == 1:
+        # Only one ### found, use it regardless of word count
+        target_hash_pos = hash_positions[0]
+        print("Only one exact ### marker found, using it")
     else:
-        # Use the second-to-last ### marker
-        target_hash_pos = hash_positions[-2]
+        # Multiple ### found, apply smart selection logic
+        # First, extract the last ### field to check word count
+        last_hash_pos = hash_positions[-1]
+        last_start_pos = last_hash_pos + 3
+        last_end_pos = model_completion.find('\n', last_start_pos)
+        if last_end_pos == -1:
+            last_end_pos = len(model_completion)
+        last_field = model_completion[last_start_pos:last_end_pos].strip()
+        
+        # Count English words in the last field
+        english_words = re.findall(r'[a-zA-Z]+', last_field)
+        word_count = len(english_words)
+        
+        print(f"Last field: '{last_field}' contains {word_count} English words")
+        
+        if word_count <= 3:
+            # Use second-to-last ### field
+            target_hash_pos = hash_positions[-2]
+            print(f"Last field has <= 3 English words, using second-to-last ### field")
+        else:
+            # Use last ### field
+            target_hash_pos = hash_positions[-1]
+            print(f"Last field has > 3 English words, using last ### field")
     
     # Extract field content (after ### until newline)
     start_pos = target_hash_pos + 3  # Skip ###
@@ -266,7 +289,7 @@ class QwenLLM:
                 outputs = self.model(
                     **inputs,
                     output_attentions=True,
-                    use_cache=True,  # 减少显存使用
+                    use_cache=True,
                     target_field_range=(field_start_token, field_end_token)  # 关键优化参数
                 )
                 
@@ -440,7 +463,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="results_extraction",
                        help="Output directory for individual sample files")
     parser.add_argument("--num-samples", type=int, default=10)
-    parser.add_argument("--max-new-tokens", type=int, default=50000)
+    parser.add_argument("--max-new-tokens", type=int, default=40000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)

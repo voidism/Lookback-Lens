@@ -200,7 +200,7 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     fig, ax = plt.subplots(figsize=figsize)
     
     # Apply consistent optimization strategy
-    print(f"Attention matrix stats: min={np.min(interpolated_matrix):.6f}, max={np.max(interpolated_matrix):.6f}, mean={np.mean(interpolated_matrix):.6f}")
+    print(f"Attention stats: min={np.min(interpolated_matrix):.6f}, max={np.max(interpolated_matrix):.6f}, mean={np.mean(interpolated_matrix):.6f}")
     
     # Get the title suffix for diagnostics and version info
     title_suffix = " (from interpolated matrix)"
@@ -225,9 +225,16 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
         im = ax.imshow(display_matrix, cmap=cmap, aspect='auto', interpolation='bilinear',
                       vmin=vmin, vmax=vmax)
     
-    # Set labels
-    ax.set_xlabel('Input Tokens (Context + Thinking + Response)', fontsize=12)
-    ax.set_ylabel('Target Field Tokens', fontsize=12)
+    # Set labels with token count information
+    prompt_tokens = prompt_end
+    thinking_tokens = thinking_end - prompt_end if thinking_end > 0 and prompt_end > 0 else 0
+    response_tokens = len(all_tokens) - response_start if response_start < len(all_tokens) else 0
+    total_tokens = len(all_tokens)
+    
+    xlabel = f'Attention Map Tokens ({total_tokens} tokens): Prompt ({prompt_tokens} tokens) + Thinking ({thinking_tokens} tokens) + Response ({response_tokens} tokens) '
+    ax.set_xlabel(xlabel, fontsize=12)
+    field_token_count = len(field_tokens)
+    ax.set_ylabel(f'Target Field Tokens ({field_token_count} tokens)', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
     
     # Set tick labels - map original token positions to interpolated coordinates
@@ -264,8 +271,8 @@ def create_attention_heatmap(attention_matrix: np.ndarray,
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label(cbar_label, rotation=270, labelpad=15)
     
-    # Add legend
-    ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
+    # Add legend with larger font and better positioning to avoid colorbar overlap
+    ax.legend(loc='upper left', bbox_to_anchor=(0.02, 0.98), fontsize=12, frameon=True, fancybox=True, shadow=True)
     
     # Adjust layout
     plt.tight_layout()
@@ -347,7 +354,7 @@ def average_attention_across_heads(field_attentions: List, method: str = 'mean')
         else:
             layer_attn_np = np.array(layer_attention)
             
-        print(f"Layer {layer_idx} attention shape: {layer_attn_np.shape}")
+        # Layer attention processed
         
         # Average across heads: [heads, field_length, seq_len] -> [field_length, seq_len]
         if method == 'mean':
@@ -361,7 +368,7 @@ def average_attention_across_heads(field_attentions: List, method: str = 'mean')
     
     # Stack all layers: List[[field_length, seq_len]] -> [num_layers, field_length, seq_len]
     stacked_attentions = np.stack(layer_attentions, axis=0)
-    print(f"Stacked attention shape: {stacked_attentions.shape}")
+    # Stacked layers processed
     
     # Average across layers: [num_layers, field_length, seq_len] -> [field_length, seq_len]
     if method == 'mean':
@@ -371,7 +378,7 @@ def average_attention_across_heads(field_attentions: List, method: str = 'mean')
     else:
         final_attention = np.mean(stacked_attentions, axis=0)
     
-    print(f"Final attention matrix shape: {final_attention.shape}")
+    # Final attention matrix computed
     
     return final_attention
 
@@ -393,9 +400,7 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
     
     print(f"Target field: '{target_field}'")
     print(f"Attention data has {len(field_attentions)} layers")
-    if field_attentions:
-        field_length = field_attentions[0].shape[1]  # [heads, field_length, seq_len]
-        print(f"Target field has {field_length} tokens")
+    # Field attention data validated
     
     # Get token strings
     all_tokens, context_length = get_token_strings(tokenizer, model_completion_ids, context)
@@ -417,7 +422,7 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
         print(f"Skipping sample {sample_idx} - empty attention matrix")
         return
     
-    print(f"Attention matrix shape: {attention_matrix.shape}")
+    # Attention matrix ready for visualization
     
     # Create visualization
     title = f"Sample {sample_idx}: Attention from Target Field to Previous Tokens (Continuous)"
@@ -437,7 +442,7 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     
-    print(f"Saved heatmap to {output_path}")
+    print(f"📊 Saved heatmap to {output_path}")
     
     # Also create a simplified version with max pooling
     attention_matrix_max = average_attention_across_heads(field_attentions, method='max')
@@ -457,7 +462,7 @@ def visualize_sample(sample_data: dict, tokenizer, output_dir: str, sample_idx: 
     fig_max.savefig(output_path_max, dpi=150, bbox_inches='tight')
     plt.close(fig_max)
     
-    print(f"Saved max attention heatmap to {output_path_max}")
+    print(f"📊 Saved max attention heatmap to {output_path_max}")
 
 def create_summary_statistics(data: List[dict], output_dir: str):
     """Create summary statistics and overview visualizations"""
@@ -550,7 +555,7 @@ def main():
                        help="Directory to save visualization outputs")
     parser.add_argument("--tokenizer-name", type=str, default="Qwen/Qwen3-14B",
                        help="Tokenizer name for decoding tokens")
-    parser.add_argument("--max-samples", type=int, default=1,
+    parser.add_argument("--max-samples", type=int, default=10,
                        help="Maximum number of samples to visualize (default: all)")
     
     args = parser.parse_args()
