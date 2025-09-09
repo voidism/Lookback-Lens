@@ -238,7 +238,7 @@ class QwenLLM:
                 top_p=top_p,
                 top_k=top_k,
                 do_sample=True,
-                output_attentions=False,  # 第一阶段：关闭attention输出节省显存
+                output_attentions=False,  # Stage 1: Turn off attention output to save memory
                 return_dict_in_generate=True,
                 pad_token_id=self.tokenizer.eos_token_id,
                 **kwargs
@@ -250,7 +250,7 @@ class QwenLLM:
         
         print(f"Generated {len(generated_tokens)} tokens")
         
-        # 第一阶段完成：返回生成的文本，attention稍后获取
+        # Stage 1 complete: return generated text, attention to be obtained later
         if return_attentions:
             return generated_text, None, generated_tokens.cpu().numpy()
         else:
@@ -258,20 +258,20 @@ class QwenLLM:
     
     def extract_field_attentions(self, full_text, field_start_token, field_end_token):
         """
-        第二阶段：针对target field进行前向传播获取attention
+        Stage 2: Forward pass on target field to obtain attention
         """
         if field_start_token is None or field_end_token is None:
             print("Warning: Invalid field positions, skipping attention extraction")
             return None
             
-        print(f"第二阶段：提取field attention (tokens {field_start_token}-{field_end_token})")
+        print(f"Stage 2: Extracting field attention (tokens {field_start_token}-{field_end_token})")
         
         with torch.no_grad():
-            # 对完整序列进行一次前向传播
+            # Perform forward pass on the complete sequence
             inputs = self.tokenizer(full_text, return_tensors="pt").to(self.device)
             print(f"Full sequence length: {inputs.input_ids.shape[-1]} tokens")
             
-            # 确保field位置在序列范围内
+            # Ensure field positions are within sequence range
             seq_len = inputs.input_ids.shape[-1]
             if field_end_token > seq_len:
                 print(f"Warning: Field end ({field_end_token}) exceeds sequence length ({seq_len})")
@@ -282,45 +282,45 @@ class QwenLLM:
                 return None
             
             try:
-                print(f"使用优化的attention计算，只计算target field tokens的attention")
-                print(f"显存优化：从O(n²)={seq_len}²降低到O(k×n)={field_end_token-field_start_token}×{seq_len}")
+                print(f"Using optimized attention computation, only computing attention for target field tokens")
+                print(f"Memory optimization: reduced from O(n²)={seq_len}² to O(k×n)={field_end_token-field_start_token}×{seq_len}")
                 
-                # 前向传播获取attention，传递target_field_range实现显存优化
+                # Forward pass to get attention, passing target_field_range for memory optimization
                 outputs = self.model(
                     **inputs,
                     output_attentions=True,
                     use_cache=True,
-                    target_field_range=(field_start_token, field_end_token)  # 关键优化参数
+                    target_field_range=(field_start_token, field_end_token)  # Key optimization parameter
                 )
                 
                 if outputs.attentions is None:
                     print("Warning: No attentions returned from forward pass")
                     return None
                 
-                # 现在attentions已经是优化后的切片，形状为[heads, field_length, seq_len]
+                # Now attentions are optimized slices with shape [heads, field_length, seq_len]
                 field_attentions = []
                 num_layers = len(outputs.attentions)
                 print(f"Processing {num_layers} attention layers")
                 
                 for layer_idx in range(num_layers):
-                    # attention已经是field相关的切片，无需再次切片
+                    # attention is already field-related slice, no need to slice again
                     layer_attn = outputs.attentions[layer_idx][0]  # [heads, field_length, seq_len]
                     
-                    # 如果只需要对之前tokens的attention，可以进一步切片
+                    # If only need attention to previous tokens, can further slice
                     # field_slice = layer_attn[:, :, :field_end_token]  # [heads, field_length, prev_tokens]
-                    field_slice = layer_attn  # 保留完整的field attention
+                    field_slice = layer_attn  # Keep complete field attention
                     
-                    # 保持在GPU上且使用float32精度以获得最佳质量
-                    # field_slice = field_slice.cpu().half()  # 原始压缩版本
+                    # Keep on GPU and use float32 precision for best quality
+                    # field_slice = field_slice.cpu().half()  # Original compressed version
                     field_attentions.append(field_slice)
                 
-                print(f"成功提取 {len(field_attentions)} 层的field attention")
+                print(f"Successfully extracted field attention for {len(field_attentions)} layers")
                 if field_attentions:
-                    print(f"每层attention形状: {field_attentions[0].shape}")
+                    print(f"Attention shape per layer: {field_attentions[0].shape}")
                     expected_shape = f"[{field_attentions[0].shape[0]}, {field_end_token-field_start_token}, {seq_len}]"
-                    print(f"预期形状: [num_heads, field_length, seq_len] = {expected_shape}")
+                    print(f"Expected shape: [num_heads, field_length, seq_len] = {expected_shape}")
                 
-                # 立即清理显存
+                # Clean memory immediately
                 torch.cuda.empty_cache()
                 
                 return field_attentions
@@ -328,7 +328,7 @@ class QwenLLM:
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     print(f"CUDA OOM during attention extraction: {str(e)}")
-                    print("尝试使用更低精度...")
+                    print("Trying lower precision...")
                     torch.cuda.empty_cache()
                     return None
                 else:
@@ -526,7 +526,7 @@ def main():
         # Create messages for Qwen
         messages = create_qwen_prompt(sample['context'])
         
-        # 第一阶段：生成文本（无attention）
+        # Stage 1: Generate text (without attention)
         try:
             model_completion, attentions, generated_tokens = llm.generate(
                 messages,
@@ -534,7 +534,7 @@ def main():
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
-                return_attentions=True  # 这里会被忽略，实际返回None
+                return_attentions=True  # This will be ignored, actually returns None
             )
             
             # Convert numpy array to list for serialization
@@ -561,21 +561,21 @@ def main():
                     print(f"Content around extracted field '{target_field}':")
                     print(repr(model_completion[start:end]))
             
-            # 第二阶段：提取field attention
+            # Stage 2: Extract field attention
             field_attentions = None
             if target_field is not None and field_start_token is not None:
-                # 构建完整文本序列
+                # Build complete text sequence
                 original_prompt = llm.tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True, enable_thinking=True
                 )
                 full_text = original_prompt + model_completion
                 
-                print("开始第二阶段attention提取...")
+                print("Starting stage 2 attention extraction...")
                 field_attentions = llm.extract_field_attentions(
                     full_text, field_start_token, field_end_token
                 )
             else:
-                print("跳过attention处理：未找到有效的target field")
+                print("Skipping attention processing: no valid target field found")
             
             # Prepare data to save immediately
             to_save = {

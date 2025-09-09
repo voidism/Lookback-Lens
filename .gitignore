@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 results_extraction/
+jailbreak_results/
 
 # C extensions
 *.so
