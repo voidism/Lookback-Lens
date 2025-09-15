@@ -6,6 +6,52 @@ import seaborn as sns
 import argparse
 import os
 from pathlib import Path
+import glob
+
+def auto_discover_jailbreak_files(jailbreak_results_dir="jailbreak_results"):
+    """
+    Automatically discover jailbreak attention result files in the specified directory.
+    Returns list of .pt files (preferred) or .json files if .pt not available.
+    """
+    if not os.path.exists(jailbreak_results_dir):
+        print(f"Warning: Directory {jailbreak_results_dir} does not exist")
+        return []
+    
+    # Look for .pt files first (they contain full tensor data)
+    pt_files = glob.glob(os.path.join(jailbreak_results_dir, "jailbreak_attention_*_n*.pt"))
+    
+    if pt_files:
+        print(f"Found {len(pt_files)} .pt files in {jailbreak_results_dir}")
+        # Sort by extracted template length
+        pt_files.sort(key=lambda x: extract_template_size_from_filename(x))
+        return pt_files
+    
+    # Fallback to .json files if no .pt files found
+    json_files = glob.glob(os.path.join(jailbreak_results_dir, "jailbreak_attention_*_n*.json"))
+    
+    if json_files:
+        print(f"Found {len(json_files)} .json files in {jailbreak_results_dir}")
+        # Sort by extracted template length
+        json_files.sort(key=lambda x: extract_template_size_from_filename(x))
+        return json_files
+    
+    print(f"No jailbreak attention result files found in {jailbreak_results_dir}")
+    return []
+
+def extract_template_size_from_filename(filepath):
+    """
+    Extract template size from filename like 'jailbreak_attention_2k_n100.pt' -> 2
+    """
+    try:
+        filename = os.path.basename(filepath)
+        # Pattern: jailbreak_attention_{size}k_n{samples}.{ext}
+        import re
+        match = re.search(r'jailbreak_attention_(\d+)k_n\d+\.[^.]+$', filename)
+        if match:
+            return int(match.group(1))
+    except:
+        pass
+    return 0
 
 def load_results(file_paths):
     """Load results from multiple .pt or JSON files"""
@@ -207,11 +253,6 @@ def create_box_plot(all_results, output_dir):
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Box plot saved to: {output_path}")
     
-    # Also save as PDF
-    pdf_path = os.path.join(output_dir, 'attention_ratio_boxplot.pdf')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    print(f"Box plot (PDF) saved to: {pdf_path}")
-    
     plt.close()
 
 def create_trend_plot(all_results, output_dir):
@@ -224,7 +265,6 @@ def create_trend_plot(all_results, output_dir):
     template_sizes = []
     mean_ratios = []
     std_ratios = []
-    median_ratios = []
     template_names = []
     
     for template_name, data in all_results.items():
@@ -234,7 +274,6 @@ def create_trend_plot(all_results, output_dir):
             template_sizes.append(extract_template_size(template_name))
             mean_ratios.append(np.mean(ratios))
             std_ratios.append(np.std(ratios))
-            median_ratios.append(np.median(ratios))
             template_names.append(template_name)
     
     # Sort by template size
@@ -242,23 +281,17 @@ def create_trend_plot(all_results, output_dir):
     template_sizes = [template_sizes[i] for i in sorted_indices]
     mean_ratios = [mean_ratios[i] for i in sorted_indices]
     std_ratios = [std_ratios[i] for i in sorted_indices]
-    median_ratios = [median_ratios[i] for i in sorted_indices]
     template_names = [template_names[i] for i in sorted_indices]
     
     # Create the plot
     plt.figure(figsize=(10, 6))
     
-    # Plot mean with error bars
+    # Plot only mean with error bars
     plt.errorbar(template_sizes, mean_ratios, yerr=std_ratios, 
                 marker='o', linewidth=2, markersize=8, capsize=5, capthick=2,
                 label='Mean ± Std', color='blue')
     
-    # Plot median
-    plt.plot(template_sizes, median_ratios, 
-            marker='s', linewidth=2, markersize=6, 
-            label='Median', color='red', linestyle='--')
-    
-    plt.title('Attention Ratio Trend Across Template Lengths\n(Part 3 Attention / Other User Prompt Attention)', 
+    plt.title('Attention Ratio Trend Across Template Lengths', 
               fontsize=14, pad=20)
     plt.xlabel('Template Length (thousands of tokens)', fontsize=12)
     plt.ylabel('Attention Ratio', fontsize=12)
@@ -269,12 +302,10 @@ def create_trend_plot(all_results, output_dir):
     # Add legend
     plt.legend()
     
-    # Add value labels on points
-    for i, (size, mean_val, median_val) in enumerate(zip(template_sizes, mean_ratios, median_ratios)):
+    # Add value labels on points (only for mean)
+    for i, (size, mean_val) in enumerate(zip(template_sizes, mean_ratios)):
         plt.annotate(f'{mean_val:.3f}', (size, mean_val), 
                     textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
-        plt.annotate(f'{median_val:.3f}', (size, median_val), 
-                    textcoords="offset points", xytext=(0,-15), ha='center', fontsize=9)
     
     plt.tight_layout()
     
@@ -282,11 +313,6 @@ def create_trend_plot(all_results, output_dir):
     output_path = os.path.join(output_dir, 'attention_ratio_trend.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Trend plot saved to: {output_path}")
-    
-    # Also save as PDF
-    pdf_path = os.path.join(output_dir, 'attention_ratio_trend.pdf')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    print(f"Trend plot (PDF) saved to: {pdf_path}")
     
     plt.close()
 
@@ -307,10 +333,14 @@ def create_distribution_plot(all_results, output_dir):
     fig, axes = plt.subplots(rows, cols, figsize=(15, 4*rows))
     if n_templates == 1:
         axes = [axes]
-    elif rows == 1:
-        axes = [axes]
-    else:
+    elif rows == 1 and cols > 1:
+        # When we have one row but multiple columns, axes is already an array
+        pass
+    elif rows > 1 and cols > 1:
         axes = axes.flatten()
+    else:
+        # Single subplot case is handled by n_templates == 1
+        pass
     
     for i, template_name in enumerate(sorted_templates):
         data = all_results[template_name]
@@ -350,11 +380,6 @@ def create_distribution_plot(all_results, output_dir):
     output_path = os.path.join(output_dir, 'attention_ratio_distributions.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Distribution plot saved to: {output_path}")
-    
-    # Also save as PDF
-    pdf_path = os.path.join(output_dir, 'attention_ratio_distributions.pdf')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    print(f"Distribution plot (PDF) saved to: {pdf_path}")
     
     plt.close()
 
@@ -458,10 +483,10 @@ def create_layer_analysis_plot(all_results, output_dir):
     # Sort templates by size
     sorted_templates = sorted(all_results.keys(), key=extract_template_size)
     
-    # Create layer-wise comparison plot
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+    # Create simplified single plot layout
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     
-    # Plot 1: Mean ratio by layer for each template
+    # Plot: Mean ratio by layer for each template (only line plots, no error bars)
     layer_indices = np.arange(num_layers)
     colors = plt.cm.viridis(np.linspace(0, 1, len(sorted_templates)))
     
@@ -471,7 +496,6 @@ def create_layer_analysis_plot(all_results, output_dir):
         
         # Calculate mean ratio for each layer across all samples and heads
         layer_means = []
-        layer_stds = []
         
         for layer_idx in range(num_layers):
             layer_ratios = []
@@ -486,68 +510,19 @@ def create_layer_analysis_plot(all_results, output_dir):
             
             if layer_ratios:
                 layer_means.append(np.mean(layer_ratios))
-                layer_stds.append(np.std(layer_ratios))
             else:
                 layer_means.append(0)
-                layer_stds.append(0)
         
         size = extract_template_size(template_name)
-        ax1.errorbar(layer_indices, layer_means, yerr=layer_stds, 
-                    label=f'{size}k tokens', color=colors[idx], 
-                    marker='o', capsize=3, capthick=1)
+        ax.plot(layer_indices, layer_means, 
+               label=f'{size}k tokens', color=colors[idx], 
+               marker='o', linewidth=2, markersize=6)
     
-    ax1.set_xlabel('Layer Index', fontsize=12)
-    ax1.set_ylabel('Mean Attention Ratio', fontsize=12)
-    ax1.set_title('Attention Ratio by Layer Across Template Lengths', fontsize=14)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Layer-wise ratio change (last layer / first layer) for each template
-    template_sizes = []
-    ratio_changes = []
-    
-    for template_name in sorted_templates:
-        data = all_results[template_name]
-        results = data['results']
-        
-        # Calculate ratio change from first to last layer
-        first_layer_ratios = []
-        last_layer_ratios = []
-        
-        for result in results:
-            ratios_by_layer_head = result['ratios_by_layer_head']
-            
-            # First layer ratios
-            first_layer = ratios_by_layer_head[0]
-            valid_first = [r for r in first_layer if not np.isinf(r)]
-            if valid_first:
-                first_layer_ratios.extend(valid_first)
-            
-            # Last layer ratios
-            last_layer = ratios_by_layer_head[-1]
-            valid_last = [r for r in last_layer if not np.isinf(r)]
-            if valid_last:
-                last_layer_ratios.extend(valid_last)
-        
-        if first_layer_ratios and last_layer_ratios:
-            mean_first = np.mean(first_layer_ratios)
-            mean_last = np.mean(last_layer_ratios)
-            change = mean_last / mean_first if mean_first > 0 else 1
-            
-            template_sizes.append(extract_template_size(template_name))
-            ratio_changes.append(change)
-    
-    if template_sizes and ratio_changes:
-        ax2.bar(range(len(template_sizes)), ratio_changes, 
-               color=colors[:len(template_sizes)], alpha=0.7)
-        ax2.set_xticks(range(len(template_sizes)))
-        ax2.set_xticklabels([f'{size}k' for size in template_sizes])
-        ax2.set_xlabel('Template Length', fontsize=12)
-        ax2.set_ylabel('Ratio Change (Last/First Layer)', fontsize=12)
-        ax2.set_title('Attention Ratio Change from First to Last Layer', fontsize=14)
-        ax2.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='No change')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+    ax.set_xlabel('Layer Index', fontsize=12)
+    ax.set_ylabel('Mean Attention Ratio', fontsize=12)
+    ax.set_title('Attention Ratio by Layer Across Template Lengths', fontsize=14)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
@@ -556,14 +531,10 @@ def create_layer_analysis_plot(all_results, output_dir):
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Layer analysis plot saved to: {output_path}")
     
-    pdf_path = os.path.join(output_dir, 'attention_layer_analysis.pdf')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    print(f"Layer analysis plot (PDF) saved to: {pdf_path}")
-    
     plt.close()
 
 def create_head_analysis_plot(all_results, output_dir):
-    """Create visualization showing attention ratio distribution across attention heads"""
+    """Create visualization showing attention ratio trends across attention heads for each layer"""
     if not all_results:
         print("No data to plot")
         return
@@ -577,166 +548,68 @@ def create_head_analysis_plot(all_results, output_dir):
         print("No head/layer information available")
         return
     
+    # Create subdirectory for layer-wise head analysis plots
+    head_analysis_dir = os.path.join(output_dir, 'head_analysis_by_layer')
+    os.makedirs(head_analysis_dir, exist_ok=True)
+    
     # Sort templates by size
     sorted_templates = sorted(all_results.keys(), key=extract_template_size)
+    colors = plt.cm.viridis(np.linspace(0, 1, len(sorted_templates)))
     
-    # Create head analysis plots
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    
-    # Plot 1: Head-wise attention ratio distribution (box plot)
-    ax1 = axes[0, 0]
-    head_data = []
-    head_labels = []
-    
-    # Aggregate data across all templates for each head
-    for head_idx in range(min(num_heads, 16)):  # Limit to first 16 heads for clarity
-        head_ratios = []
-        for template_name in sorted_templates:
+    # Create separate plot for each layer
+    for layer_idx in range(num_layers):
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        head_indices = np.arange(num_heads)
+        
+        # Plot each template for this layer
+        for template_idx, template_name in enumerate(sorted_templates):
             data = all_results[template_name]
             results = data['results']
             
-            for result in results:
-                ratios_by_layer_head = result['ratios_by_layer_head']
-                # Get ratios for this head across all layers
-                for layer_idx in range(num_layers):
-                    ratio = ratios_by_layer_head[layer_idx][head_idx]
-                    if not np.isinf(ratio) and ratio <= 10:  # Cap extreme values
-                        head_ratios.append(ratio)
-        
-        if head_ratios:
-            head_data.append(head_ratios)
-            head_labels.append(f'H{head_idx}')
-    
-    if head_data:
-        ax1.boxplot(head_data[:8], tick_labels=head_labels[:8])  # Show first 8 heads
-        ax1.set_title('Attention Ratio Distribution by Head (First 8 Heads)', fontsize=12)
-        ax1.set_xlabel('Attention Head')
-        ax1.set_ylabel('Attention Ratio')
-        ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Head variance across templates
-    ax2 = axes[0, 1]
-    template_sizes = []
-    head_variances = []
-    
-    for template_name in sorted_templates:
-        data = all_results[template_name]
-        results = data['results']
-        
-        # Calculate variance in head attention ratios
-        all_head_ratios = []
-        for result in results:
-            ratios_by_layer_head = result['ratios_by_layer_head']
-            for layer_ratios in ratios_by_layer_head:
-                valid_ratios = [r for r in layer_ratios if not np.isinf(r) and r <= 10]
-                all_head_ratios.extend(valid_ratios)
-        
-        if all_head_ratios:
-            variance = np.var(all_head_ratios)
-            template_sizes.append(extract_template_size(template_name))
-            head_variances.append(variance)
-    
-    if template_sizes and head_variances:
-        ax2.bar(range(len(template_sizes)), head_variances, alpha=0.7)
-        ax2.set_xticks(range(len(template_sizes)))
-        ax2.set_xticklabels([f'{size}k' for size in template_sizes])
-        ax2.set_title('Attention Head Variance by Template Length', fontsize=12)
-        ax2.set_xlabel('Template Length')
-        ax2.set_ylabel('Attention Ratio Variance')
-        ax2.grid(True, alpha=0.3)
-    
-    # Plot 3: Head attention heatmap for one template
-    ax3 = axes[1, 0]
-    if sorted_templates:
-        # Use middle template for heatmap
-        mid_template = sorted_templates[len(sorted_templates)//2]
-        data = all_results[mid_template]
-        results = data['results']
-        
-        # Create average attention matrix [layers x heads]
-        avg_ratios = np.zeros((num_layers, num_heads))
-        counts = np.zeros((num_layers, num_heads))
-        
-        for result in results:
-            ratios_by_layer_head = result['ratios_by_layer_head']
-            for layer_idx in range(num_layers):
-                for head_idx in range(num_heads):
-                    ratio = ratios_by_layer_head[layer_idx][head_idx]
-                    if not np.isinf(ratio):
-                        avg_ratios[layer_idx, head_idx] += ratio
-                        counts[layer_idx, head_idx] += 1
-        
-        # Calculate averages
-        with np.errstate(divide='ignore', invalid='ignore'):
-            avg_ratios = np.divide(avg_ratios, counts, 
-                                 out=np.zeros_like(avg_ratios), 
-                                 where=(counts != 0))
-        
-        # Cap values for visualization
-        avg_ratios = np.clip(avg_ratios, 0, 5)
-        
-        im = ax3.imshow(avg_ratios, cmap='viridis', aspect='auto')
-        ax3.set_title(f'Attention Ratio Heatmap - {extract_template_size(mid_template)}k Template', fontsize=12)
-        ax3.set_xlabel('Attention Head')
-        ax3.set_ylabel('Layer')
-        
-        # Add colorbar
-        plt.colorbar(im, ax=ax3, label='Attention Ratio')
-    
-    # Plot 4: Head consistency across templates
-    ax4 = axes[1, 1]
-    if len(sorted_templates) > 1:
-        head_consistency = []
-        
-        for head_idx in range(min(num_heads, 8)):  # First 8 heads
-            template_means = []
-            for template_name in sorted_templates:
-                data = all_results[template_name]
-                results = data['results']
-                
+            # Calculate mean ratio for each head in this specific layer
+            head_means = []
+            
+            for head_idx in range(num_heads):
                 head_ratios = []
                 for result in results:
                     ratios_by_layer_head = result['ratios_by_layer_head']
-                    for layer_ratios in ratios_by_layer_head:
-                        ratio = layer_ratios[head_idx]
-                        if not np.isinf(ratio):
-                            head_ratios.append(ratio)
+                    # Get ratio for this specific head and layer
+                    ratio = ratios_by_layer_head[layer_idx][head_idx]
+                    if not np.isinf(ratio):  # Only filter out infinite values
+                        head_ratios.append(ratio)
                 
                 if head_ratios:
-                    template_means.append(np.mean(head_ratios))
+                    head_means.append(np.mean(head_ratios))
+                else:
+                    head_means.append(0)
             
-            if len(template_means) > 1:
-                consistency = np.std(template_means)
-                head_consistency.append(consistency)
-            else:
-                head_consistency.append(0)
+            size = extract_template_size(template_name)
+            ax.plot(head_indices, head_means, 
+                   label=f'{size}k tokens', color=colors[template_idx], 
+                   marker='o', linewidth=2, markersize=6)
         
-        if head_consistency:
-            ax4.bar(range(len(head_consistency)), head_consistency, alpha=0.7)
-            ax4.set_xticks(range(len(head_consistency)))
-            ax4.set_xticklabels([f'H{i}' for i in range(len(head_consistency))])
-            ax4.set_title('Head Consistency Across Templates (Lower = More Consistent)', fontsize=12)
-            ax4.set_xlabel('Attention Head')
-            ax4.set_ylabel('Standard Deviation of Means')
-            ax4.grid(True, alpha=0.3)
+        ax.set_xlabel('Attention Head Index', fontsize=12)
+        ax.set_ylabel('Mean Attention Ratio', fontsize=12)
+        ax.set_title(f'Attention Ratio by Head - Layer {layer_idx}', fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save plot for this layer in the subdirectory
+        output_path = os.path.join(head_analysis_dir, f'layer_{layer_idx:02d}_head_analysis.png')
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close()
     
-    plt.tight_layout()
-    
-    # Save plot
-    output_path = os.path.join(output_dir, 'attention_head_analysis.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"Head analysis plot saved to: {output_path}")
-    
-    pdf_path = os.path.join(output_dir, 'attention_head_analysis.pdf')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    print(f"Head analysis plot (PDF) saved to: {pdf_path}")
-    
-    plt.close()
+    print(f"Head analysis plots saved in {head_analysis_dir}/: {num_layers} plots for layers 0-{num_layers-1}")
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize jailbreak attention analysis results")
-    parser.add_argument("--input-files", type=str, nargs='+', required=True,
-                       help="Paths to .pt or JSON result files from extract_jailbreak_attention.py")
+    parser.add_argument("--input-files", type=str, nargs='*', 
+                       help="Paths to .pt or JSON result files from extract_jailbreak_attention.py. If not provided, will auto-discover files in --jailbreak-results-dir")
+    parser.add_argument("--jailbreak-results-dir", type=str, default="jailbreak_results",
+                       help="Directory to search for jailbreak attention result files when --input-files not provided (default: jailbreak_results)")
     parser.add_argument("--output-dir", type=str, default="jailbreak_attention_visualizations",
                        help="Output directory for visualization files")
     
@@ -746,9 +619,24 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Output directory: {args.output_dir}")
     
+    # Determine input files
+    if args.input_files:
+        input_files = args.input_files
+        print(f"Using provided input files: {input_files}")
+    else:
+        print(f"Auto-discovering jailbreak result files in: {args.jailbreak_results_dir}")
+        input_files = auto_discover_jailbreak_files(args.jailbreak_results_dir)
+        if not input_files:
+            print(f"No jailbreak attention result files found in {args.jailbreak_results_dir}")
+            print("Please either:")
+            print(f"  1. Place result files in the {args.jailbreak_results_dir} directory, or")
+            print("  2. Specify files manually with --input-files")
+            return
+        print(f"Discovered files: {input_files}")
+    
     # Load results
     print("Loading results from files...")
-    all_results = load_results(args.input_files)
+    all_results = load_results(input_files)
     
     if not all_results:
         print("No valid data loaded. Please check input files.")
@@ -772,11 +660,12 @@ def main():
     
     print(f"\nVisualization complete! Files saved to: {args.output_dir}")
     print("Generated files:")
-    print("  - attention_ratio_boxplot.png/pdf: Box plots showing distribution across templates")
-    print("  - attention_ratio_trend.png/pdf: Trend line showing mean/median vs template size")
-    print("  - attention_ratio_distributions.png/pdf: Histograms for each template")
-    print("  - attention_layer_analysis.png/pdf: Layer-wise attention analysis")
-    print("  - attention_head_analysis.png/pdf: Attention head analysis and heatmaps")
+    print("  - attention_ratio_boxplot.png: Box plots showing distribution across templates")
+    print("  - attention_ratio_trend.png: Trend line showing mean/median vs template size")
+    print("  - attention_ratio_distributions.png: Histograms for each template")
+    print("  - attention_layer_analysis.png: Layer-wise attention analysis")
+    print("  - head_analysis_by_layer/: Directory containing per-layer attention head analysis plots")
+    print("    └── layer_XX_head_analysis.png: One plot per layer showing head ratios")
     print("  - attention_ratio_summary.json: Detailed statistics in JSON format")
     print("  - attention_ratio_summary.txt: Human-readable summary with trend analysis")
     print("\nNote: For full functionality (layer and head analysis), use .pt files generated by extract_jailbreak_attention.py")

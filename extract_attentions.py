@@ -297,22 +297,21 @@ class QwenLLM:
                     print("Warning: No attentions returned from forward pass")
                     return None
                 
-                # Now attentions are optimized slices with shape [heads, field_length, seq_len]
+                # With target_field_range optimization, attention weights shape is [batch, heads, field_length, seq_len]
                 field_attentions = []
                 num_layers = len(outputs.attentions)
                 print(f"Processing {num_layers} attention layers")
                 
                 for layer_idx in range(num_layers):
-                    # attention is already field-related slice, no need to slice again
-                    layer_attn = outputs.attentions[layer_idx][0]  # [heads, field_length, seq_len]
+                    # With target_field_range, only target field attention weights are returned
+                    # Shape: [batch, heads, field_length, seq_len]
+                    layer_attn = outputs.attentions[layer_idx]  # [batch, heads, field_length, seq_len]
                     
-                    # If only need attention to previous tokens, can further slice
-                    # field_slice = layer_attn[:, :, :field_end_token]  # [heads, field_length, prev_tokens]
-                    field_slice = layer_attn  # Keep complete field attention
+                    # Remove batch dimension to get [heads, field_length, seq_len]
+                    field_attn = layer_attn[0]  # [heads, field_length, seq_len]
                     
                     # Keep on GPU and use float32 precision for best quality
-                    # field_slice = field_slice.cpu().half()  # Original compressed version
-                    field_attentions.append(field_slice)
+                    field_attentions.append(field_attn)
                 
                 print(f"Successfully extracted field attention for {len(field_attentions)} layers")
                 if field_attentions:

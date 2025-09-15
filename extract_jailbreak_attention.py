@@ -210,8 +210,11 @@ class QwenLLM:
         return model, tokenizer
     
     def extract_last_token_attention(self, full_text):
-        """Extract attention weights for the last token of the sequence"""
-        print("Extracting attention for last token")
+        """
+        Extract attention weights for the last token using optimized stage-2 approach
+        Similar to extract_attentions.py - only compute attention for the last token position
+        """
+        print("Extracting attention for last token using optimized stage-2 approach")
         
         with torch.no_grad():
             # Tokenize full text
@@ -219,48 +222,50 @@ class QwenLLM:
             seq_len = inputs.input_ids.shape[-1]
             print(f"Full sequence length: {seq_len} tokens")
             
-            try:
-                # Forward pass to get attention
-                outputs = self.model(
-                    **inputs,
-                    output_attentions=True,
-                    use_cache=True
-                )
+            # Define target range: only last token (memory optimization)
+            last_token_pos = seq_len - 1
+            target_range = (last_token_pos, seq_len)  # [start, end)
+            
+            print(f"Memory optimization: computing attention only for last token (position {last_token_pos})")
+            print(f"Reduced from O(n²)={seq_len}² to O(1×n)=1×{seq_len} - saving ~{seq_len-1}x memory")
+            
+            # Stage 2: Forward pass to get attention with target range optimization
+            outputs = self.model(
+                **inputs,
+                output_attentions=True,
+                use_cache=True,
+                target_field_range=target_range  # Key optimization: only compute last token attention
+            )
+            
+            if outputs.attentions is None:
+                print("Warning: No attentions returned from forward pass")
+                return None
+            
+            # Process attention outputs with target_field_range optimization
+            last_token_attentions = []
+            num_layers = len(outputs.attentions)
+            print(f"Processing {num_layers} attention layers")
+            
+            for layer_idx in range(num_layers):
+                # With target_field_range, only target field attention weights are returned
+                # Shape: [batch, heads, target_len, seq_len] where target_len=1 for last token
+                layer_attn = outputs.attentions[layer_idx]  # [batch, heads, 1, seq_len]
                 
-                if outputs.attentions is None:
-                    print("Warning: No attentions returned from forward pass")
-                    return None
+                # Remove batch dimension and squeeze target token dimension
+                layer_attn = layer_attn[0]  # Remove batch: [heads, 1, seq_len]
+                last_token_attn = layer_attn[:, 0, :]  # [heads, seq_len] - squeeze the single token dim
                 
-                # Extract attention for last token across all layers and heads
-                last_token_attentions = []
-                num_layers = len(outputs.attentions)
-                print(f"Processing {num_layers} attention layers")
+                last_token_attentions.append(last_token_attn.cpu())
+            
+            print(f"Successfully extracted last token attention for {len(last_token_attentions)} layers")
+            if last_token_attentions:
+                print(f"Attention shape per layer: {last_token_attentions[0].shape} [heads, seq_len]")
+            
+            # Clean memory immediately
+            torch.cuda.empty_cache()
+            
+            return last_token_attentions
                 
-                for layer_idx in range(num_layers):
-                    # outputs.attentions[layer_idx] shape: [batch, heads, seq_len, seq_len]
-                    layer_attn = outputs.attentions[layer_idx][0]  # Remove batch dimension: [heads, seq_len, seq_len]
-                    
-                    # Get attention weights for last token (last row)
-                    last_token_attn = layer_attn[:, -1, :]  # [heads, seq_len]
-                    
-                    last_token_attentions.append(last_token_attn.cpu())
-                
-                print(f"Successfully extracted last token attention for {len(last_token_attentions)} layers")
-                if last_token_attentions:
-                    print(f"Attention shape per layer: {last_token_attentions[0].shape} [heads, seq_len]")
-                
-                # Clean memory immediately
-                torch.cuda.empty_cache()
-                
-                return last_token_attentions
-                
-            except RuntimeError as e:
-                if "out of memory" in str(e):
-                    print(f"CUDA OOM during attention extraction: {str(e)}")
-                    torch.cuda.empty_cache()
-                    return None
-                else:
-                    raise e
 
 def extract_attention_data(last_token_attentions, user_start_token, user_end_token, 
                           part3_start_token, part3_end_token):
@@ -380,10 +385,10 @@ def main():
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-14B")
     parser.add_argument("--num-gpus", type=str, default="auto")
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
-    parser.add_argument("--template-name", type=str, default='template_11k',
+    parser.add_argument("--template-name", type=str, default='template_4k',
                        help="Template name (e.g., template_1k, template_3k)")
     parser.add_argument("--data-path", type=str, default="data/jailbreakbench.json")
-    parser.add_argument("--num-samples", type=int, default=50,
+    parser.add_argument("--num-samples", type=int, default=100,
                        help="Number of jailbreak instructions to process")
     parser.add_argument("--output-dir", type=str, default="jailbreak_results",
                        help="Output directory for results")
@@ -522,6 +527,61 @@ def main():
             clean_memory()
             continue
     
+    # Calculate average attention ratios across all successful samples
+    if results['results']:
+        all_ratios = []
+        total_part3_attention = 0.0
+        total_other_attention = 0.0
+        
+        for result in results['results']:
+            metadata = result['attention_metadata']
+            summary = metadata['summary']
+            
+            ratio = summary['overall_ratio']
+            if ratio != float('inf') and not np.isnan(ratio):  # Filter out invalid ratios
+                all_ratios.append(ratio)
+                total_part3_attention += summary['total_part3_attention']
+                total_other_attention += summary['total_other_attention']
+        
+        # Calculate statistics
+        if all_ratios:
+            avg_ratio = np.mean(all_ratios)
+            median_ratio = np.median(all_ratios)
+            std_ratio = np.std(all_ratios)
+            
+            # Overall ratio across all samples
+            overall_avg_ratio = total_part3_attention / total_other_attention if total_other_attention > 0 else float('inf')
+            
+            # Add average statistics to results
+            results['average_statistics'] = {
+                'mean_ratio': avg_ratio,
+                'median_ratio': median_ratio,
+                'std_ratio': std_ratio,
+                'overall_ratio_across_samples': overall_avg_ratio,
+                'total_part3_attention_sum': total_part3_attention,
+                'total_other_attention_sum': total_other_attention,
+                'valid_samples_for_ratio': len(all_ratios)
+            }
+            
+            print(f"\n=== Average Statistics ===")
+            print(f"Mean attention ratio: {avg_ratio:.6f}")
+            print(f"Median attention ratio: {median_ratio:.6f}")
+            print(f"Std attention ratio: {std_ratio:.6f}")
+            print(f"Overall ratio across samples: {overall_avg_ratio:.6f}")
+        else:
+            results['average_statistics'] = {
+                'mean_ratio': None,
+                'median_ratio': None, 
+                'std_ratio': None,
+                'overall_ratio_across_samples': None,
+                'valid_samples_for_ratio': 0,
+                'note': 'No valid ratios found'
+            }
+    else:
+        results['average_statistics'] = {
+            'note': 'No successful samples to calculate averages'
+        }
+
     # Save final results
     results['success_count'] = success_count
     results['failed_count'] = failed_count

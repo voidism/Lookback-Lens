@@ -142,43 +142,7 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    # Optimized computation for target field tokens only
-    if target_field_range is not None:
-        start_idx, end_idx = target_field_range
-        seq_len = query.shape[2]
-        
-        # Validate range
-        if start_idx >= seq_len or end_idx > seq_len or start_idx >= end_idx:
-            print(f"Warning: Invalid target_field_range ({start_idx}, {end_idx}) for sequence length {seq_len}")
-            target_field_range = None
-        else:
-            # Only compute attention for target tokens
-            target_query = query[:, :, start_idx:end_idx, :]  # [batch, heads, target_len, head_dim]
-            
-            # Compute attention weights only for target tokens: [batch, heads, target_len, seq_len]
-            attn_weights = torch.matmul(target_query, key_states.transpose(2, 3)) * scaling
-            
-            if attention_mask is not None:
-                # Extract mask slice for target tokens
-                causal_mask = attention_mask[:, :, start_idx:end_idx, : key_states.shape[-2]]
-                attn_weights = attn_weights + causal_mask
-
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-            attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-            
-            # Compute output only for target tokens
-            target_attn_output = torch.matmul(attn_weights, value_states)  # [batch, heads, target_len, head_dim]
-            
-            # Create full-size output tensor and fill only target positions
-            attn_output = torch.zeros_like(query)  # [batch, heads, seq_len, head_dim]
-            attn_output[:, :, start_idx:end_idx, :] = target_attn_output
-            
-            attn_output = attn_output.transpose(1, 2).contiguous()
-            
-            # Return only target attention weights for memory efficiency
-            return attn_output, attn_weights
-
-    # Original full attention computation (fallback)
+    # Always perform complete attention computation to maintain correctness
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
@@ -189,6 +153,21 @@ def eager_attention_forward(
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
+    # Memory optimization: only return target field attention weights for storage
+    if target_field_range is not None:
+        start_idx, end_idx = target_field_range
+        seq_len = attn_weights.shape[2]
+        
+        # Validate range
+        if start_idx >= seq_len or end_idx > seq_len or start_idx >= end_idx:
+            print(f"Warning: Invalid target_field_range ({start_idx}, {end_idx}) for sequence length {seq_len}")
+            return attn_output, attn_weights  # Return full weights on invalid range
+        
+        # Only return target field attention weights to save memory
+        target_attn_weights = attn_weights[:, :, start_idx:end_idx, :]  # [batch, heads, target_len, seq_len]
+        return attn_output, target_attn_weights  # Complete output, partial weights
+
+    # Normal case: return complete attention weights
     return attn_output, attn_weights
 
 
