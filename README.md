@@ -153,10 +153,11 @@ Accuracy: 0.586
 Please cite our paper if it's helpful to your work!
 
 ```
-@article{chuang2024lookback,
+@inproceedings{chuang2024lookback,
   title={Lookback Lens: Detecting and Mitigating Contextual Hallucinations in Large Language Models Using Only Attention Maps},
   author={Chuang, Yung-Sung and Qiu, Linlu and Hsieh, Cheng-Yu and Krishna, Ranjay and Kim, Yoon and Glass, James},
-  journal={arXiv preprint arXiv:2407.07071},
-  year={2024},
+  booktitle={Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing},
+  pages={1419--1436},
+  year={2024}
 }
 ```
