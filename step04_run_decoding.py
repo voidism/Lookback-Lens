@@ -23,6 +23,12 @@ transformers.logging.set_verbosity(40)
 # TypeError: num_tokens_from_message() missing 1 required positional argument: 'llama2_tokenizer'
 # you can use this fallback version to avoid crashes when tokenizer is unavailable.
 
+# Bug only appears with CNN/DM because of input length.
+
+# CNN/DM documents are long enough to trigger truncation, which calls
+# `num_tokens_from_message` without a tokenizer. XSUM/NQ usually do not
+# reach this branch, masking the issue.
+
 def num_tokens_from_message(text, llama2_tokenizer=None):
     if llama2_tokenizer is None:
         # fallback: approximate token count without tokenizer
