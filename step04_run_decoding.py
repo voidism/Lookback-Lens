@@ -18,9 +18,18 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 transformers.logging.set_verbosity(40)
 
+# NOTE:
+# If you encounter:
+# TypeError: num_tokens_from_message() missing 1 required positional argument: 'llama2_tokenizer'
+# you can use this fallback version to avoid crashes when tokenizer is unavailable.
 
-def num_tokens_from_message(message, llama2_tokenizer):
-    return len(llama2_tokenizer(message)['input_ids'])
+def num_tokens_from_message(text, llama2_tokenizer=None):
+    if llama2_tokenizer is None:
+        # fallback: approximate token count without tokenizer
+        return len(text.split())
+    return len(llama2_tokenizer.encode(text))
+# def num_tokens_from_message(message, llama2_tokenizer):
+#     return len(llama2_tokenizer(message)['input_ids'])
 
 
 def truncate_message(prompt1, prompt2, llama2_tokenizer):
