@@ -265,15 +265,29 @@ def create_trend_plot(all_results, output_dir):
     template_sizes = []
     mean_ratios = []
     std_ratios = []
+    ci_95_lower = []
+    ci_95_upper = []
     template_names = []
     
     for template_name, data in all_results.items():
         results = data['results']
         ratios = [r['overall_ratio'] for r in results if r['overall_ratio'] is not None and not np.isinf(r['overall_ratio'])]
         if ratios:
+            n = len(ratios)
+            mean_val = np.mean(ratios)
+            std_val = np.std(ratios, ddof=1)  # Sample standard deviation
+            
+            # 95% confidence interval using t-distribution
+            from scipy import stats
+            confidence = 0.95
+            t_critical = stats.t.ppf((1 + confidence) / 2, n - 1)
+            margin_of_error = t_critical * std_val / np.sqrt(n)
+            
             template_sizes.append(extract_template_size(template_name))
-            mean_ratios.append(np.mean(ratios))
-            std_ratios.append(np.std(ratios))
+            mean_ratios.append(mean_val)
+            std_ratios.append(std_val)
+            ci_95_lower.append(mean_val - margin_of_error)
+            ci_95_upper.append(mean_val + margin_of_error)
             template_names.append(template_name)
     
     # Sort by template size
@@ -281,19 +295,23 @@ def create_trend_plot(all_results, output_dir):
     template_sizes = [template_sizes[i] for i in sorted_indices]
     mean_ratios = [mean_ratios[i] for i in sorted_indices]
     std_ratios = [std_ratios[i] for i in sorted_indices]
+    ci_95_lower = [ci_95_lower[i] for i in sorted_indices]
+    ci_95_upper = [ci_95_upper[i] for i in sorted_indices]
     template_names = [template_names[i] for i in sorted_indices]
     
     # Create the plot
     plt.figure(figsize=(10, 6))
     
-    # Plot only mean with error bars
+    # Plot 95% CI as shaded region
+    plt.fill_between(template_sizes, ci_95_lower, ci_95_upper, 
+                     alpha=0.2, color='blue', label='95% Confidence Interval')
+    
+    # Plot mean with error bars (std)
     plt.errorbar(template_sizes, mean_ratios, yerr=std_ratios, 
                 marker='o', linewidth=2, markersize=8, capsize=5, capthick=2,
                 label='Mean ± Std', color='blue')
     
-    plt.title('Attention Ratio Trend Across Template Lengths', 
-              fontsize=14, pad=20)
-    plt.xlabel('Template Length (thousands of tokens)', fontsize=12)
+    plt.xlabel('CoT Length (thousands of tokens)', fontsize=12)
     plt.ylabel('Attention Ratio', fontsize=12)
     
     # Add grid
@@ -302,7 +320,7 @@ def create_trend_plot(all_results, output_dir):
     # Add legend
     plt.legend()
     
-    # Add value labels on points (only for mean)
+    # Add value labels on points
     for i, (size, mean_val) in enumerate(zip(template_sizes, mean_ratios)):
         plt.annotate(f'{mean_val:.3f}', (size, mean_val), 
                     textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
@@ -315,7 +333,6 @@ def create_trend_plot(all_results, output_dir):
     print(f"Trend plot saved to: {output_path}")
     
     plt.close()
-
 def create_distribution_plot(all_results, output_dir):
     """Create distribution plot showing histograms for each template"""
     if not all_results:
