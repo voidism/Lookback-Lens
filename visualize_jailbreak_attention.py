@@ -8,6 +8,14 @@ import os
 from pathlib import Path
 import glob
 
+FONT_SIZES = {
+    "title": 23,
+    "label": 21,
+    "tick": 18,
+    "legend": 16,
+    "annotation": 18,
+}
+
 def auto_discover_jailbreak_files(jailbreak_results_dir="jailbreak_results"):
     """
     Automatically discover jailbreak attention result files in the specified directory.
@@ -224,9 +232,11 @@ def create_box_plot(all_results, output_dir):
         patch.set_alpha(0.7)
     
     plt.title('Attention Ratio Distribution Across Template Lengths\n(Part 3 Attention / Other User Prompt Attention)', 
-              fontsize=14, pad=20)
-    plt.xlabel('Template Length (thousands of tokens)', fontsize=12)
-    plt.ylabel('Attention Ratio', fontsize=12)
+              fontsize=FONT_SIZES["title"], pad=20)
+    plt.xlabel('Template Length (thousands of tokens)', fontsize=FONT_SIZES["label"])
+    plt.ylabel('Attention Ratio', fontsize=FONT_SIZES["label"])
+    plt.xticks(fontsize=FONT_SIZES["tick"])
+    plt.yticks(fontsize=FONT_SIZES["tick"])
     
     # Add grid for better readability
     plt.grid(True, alpha=0.3, axis='y')
@@ -243,7 +253,7 @@ def create_box_plot(all_results, output_dir):
             median_ratio = np.median(ratios)
             stats_text.append(f"{extract_template_size(template_name)}k: μ={mean_ratio:.3f}, m={median_ratio:.3f}")
     
-    plt.figtext(0.02, 0.02, '\n'.join(stats_text), fontsize=8, 
+    plt.figtext(0.02, 0.02, '\n'.join(stats_text), fontsize=FONT_SIZES["annotation"], 
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.5))
     
     plt.tight_layout()
@@ -311,19 +321,21 @@ def create_trend_plot(all_results, output_dir):
                 marker='o', linewidth=2, markersize=8, capsize=5, capthick=2,
                 label='Mean ± Std', color='blue')
     
-    plt.xlabel('CoT Length (thousands of tokens)', fontsize=12)
-    plt.ylabel('Attention Ratio', fontsize=12)
+    plt.xlabel('CoT Length (thousands of tokens)', fontsize=FONT_SIZES["label"])
+    plt.ylabel('Attention Ratio', fontsize=FONT_SIZES["label"])
+    plt.xticks(fontsize=FONT_SIZES["tick"])
+    plt.yticks(fontsize=FONT_SIZES["tick"])
     
     # Add grid
     plt.grid(True, alpha=0.3)
     
     # Add legend
-    plt.legend()
+    plt.legend(fontsize=FONT_SIZES["legend"])
     
     # Add value labels on points
     for i, (size, mean_val) in enumerate(zip(template_sizes, mean_ratios)):
         plt.annotate(f'{mean_val:.3f}', (size, mean_val), 
-                    textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
+                    textcoords="offset points", xytext=(0,10), ha='center', fontsize=FONT_SIZES["annotation"])
     
     plt.tight_layout()
     
@@ -380,17 +392,19 @@ def create_distribution_plot(all_results, output_dir):
         ax.axvline(mean_val, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_val:.3f}')
         ax.axvline(median_val, color='orange', linestyle='-', linewidth=2, label=f'Median: {median_val:.3f}')
         
-        ax.set_title(f'{template_name} ({extract_template_size(template_name)}k tokens)\nn={len(ratios)}')
-        ax.set_xlabel('Attention Ratio')
-        ax.set_ylabel('Frequency')
-        ax.legend()
+        ax.set_title(f'{template_name} ({extract_template_size(template_name)}k tokens)\nn={len(ratios)}',
+                     fontsize=FONT_SIZES["title"])
+        ax.set_xlabel('Attention Ratio', fontsize=FONT_SIZES["label"])
+        ax.set_ylabel('Frequency', fontsize=FONT_SIZES["label"])
+        ax.tick_params(axis='both', labelsize=FONT_SIZES["tick"])
+        ax.legend(fontsize=FONT_SIZES["legend"])
         ax.grid(True, alpha=0.3)
     
     # Hide unused subplots
     for i in range(n_templates, len(axes)):
         axes[i].set_visible(False)
     
-    plt.suptitle('Attention Ratio Distributions by Template Length', fontsize=16)
+    plt.suptitle('Attention Ratio Distributions by Template Length', fontsize=FONT_SIZES["title"])
     plt.tight_layout()
     
     # Save plot
@@ -535,10 +549,11 @@ def create_layer_analysis_plot(all_results, output_dir):
                label=f'{size}k tokens', color=colors[idx], 
                marker='o', linewidth=2, markersize=6)
     
-    ax.set_xlabel('Layer Index', fontsize=12)
-    ax.set_ylabel('Mean Attention Ratio', fontsize=12)
-    ax.set_title('Attention Ratio by Layer Across Template Lengths', fontsize=14)
-    ax.legend()
+    ax.set_xlabel('Layer Index', fontsize=FONT_SIZES["label"])
+    ax.set_ylabel('Mean Attention Ratio', fontsize=FONT_SIZES["label"])
+    ax.set_title('Attention Ratio by Layer Across CoT Lengths', fontsize=FONT_SIZES["title"])
+    ax.tick_params(axis='both', labelsize=FONT_SIZES["tick"])
+    ax.legend(fontsize=FONT_SIZES["legend"])
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
@@ -606,10 +621,11 @@ def create_head_analysis_plot(all_results, output_dir):
                    label=f'{size}k tokens', color=colors[template_idx], 
                    marker='o', linewidth=2, markersize=6)
         
-        ax.set_xlabel('Attention Head Index', fontsize=12)
-        ax.set_ylabel('Mean Attention Ratio', fontsize=12)
-        ax.set_title(f'Attention Ratio by Head - Layer {layer_idx}', fontsize=14)
-        ax.legend()
+        ax.set_xlabel('Attention Head Index', fontsize=FONT_SIZES["label"])
+        ax.set_ylabel('Mean Attention Ratio', fontsize=FONT_SIZES["label"])
+        ax.set_title(f'Attention Ratio by Head - Layer {layer_idx}', fontsize=FONT_SIZES["title"])
+        ax.tick_params(axis='both', labelsize=FONT_SIZES["tick"])
+        ax.legend(fontsize=FONT_SIZES["legend"])
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
@@ -627,7 +643,7 @@ def main():
                        help="Paths to .pt or JSON result files from extract_jailbreak_attention.py. If not provided, will auto-discover files in --jailbreak-results-dir")
     parser.add_argument("--jailbreak-results-dir", type=str, default="jailbreak_results",
                        help="Directory to search for jailbreak attention result files when --input-files not provided (default: jailbreak_results)")
-    parser.add_argument("--output-dir", type=str, default="jailbreak_attention_visualizations",
+    parser.add_argument("--output-dir", type=str, default="jailbreak_attention_visualizations2",
                        help="Output directory for visualization files")
     
     args = parser.parse_args()

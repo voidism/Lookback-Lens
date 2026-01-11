@@ -5,6 +5,7 @@ __pycache__/
 results_extraction/
 jailbreak_results/
 jailbreak_attention_visualizations/
+jailbreak_attention_visualizations2/
 
 # C extensions
 *.so
